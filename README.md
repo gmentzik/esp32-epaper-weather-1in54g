@@ -80,13 +80,16 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
 
 ## Software setup
 
-1. **Arduino IDE** with the ESP32 board package (Espressif) installed.
-2. **Libraries** (Library Manager):
+1. **Get the code:** clone the repo or download the ZIP. The sketch is in the
+   `ESP32_WEATHER_EPAPER/` subfolder. Open `ESP32_WEATHER_EPAPER/ESP32_WEATHER_EPAPER.ino`
+   in the Arduino IDE. The outer folder can have any name.
+2. **Arduino IDE** with the ESP32 board package (Espressif) installed.
+3. **Libraries** (Library Manager):
    - `ArduinoJson` (v7)
    - `DHT sensor library` by Adafruit (also install `Adafruit Unified Sensor` when asked)
-3. **WiFi credentials:** copy `secrets.example.h` to `secrets.h` in the same folder and fill in
-   your WiFi name and password. `secrets.h` is in `.gitignore`, so it is never committed.
-4. **Settings** at the top of `ESP32_WEATHER_EPAPER.ino`:
+4. **WiFi credentials:** in the sketch folder, copy `secrets.example.h` to `secrets.h` and
+   fill in your WiFi name and password. `secrets.h` is in `.gitignore`, so it is never committed.
+5. **Settings** at the top of `ESP32_WEATHER_EPAPER.ino`:
 
    | Setting | Default | Meaning |
    |---|---|---|
@@ -97,9 +100,9 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
    | `MAX_FAIL_COUNT` | `15` | Maximum backoff steps |
    | `DEBUG_LOG` | `1` | `1` = progress on the Serial Monitor (115200 baud), `0` = silent for battery use |
 
-5. **Board:** Tools → Board → *ESP32 Dev Module*, select the COM port, then Upload.
+6. **Board:** Tools → Board → *ESP32 Dev Module*, select the COM port, then Upload.
 
-The folder must be named `ESP32_WEATHER_EPAPER`, the same as the `.ino` file, for the Arduino IDE to open it.
+Keep the sketch folder named `ESP32_WEATHER_EPAPER`. The Arduino IDE needs it to match the `.ino` file name.
 
 ## First start
 
@@ -120,6 +123,8 @@ The folder must be named `ESP32_WEATHER_EPAPER`, the same as the `.ino` file, fo
 
 ## Project files
 
+All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
+
 | File | Purpose |
 |---|---|
 | `ESP32_WEATHER_EPAPER.ino` | Main program: WiFi, fetch, layout, sleep and retry logic |
@@ -127,7 +132,7 @@ The folder must be named `ESP32_WEATHER_EPAPER`, the same as the `.ino` file, fo
 | `weather_icons.cpp/.h` | Weather icons drawn for each condition |
 | `secrets.example.h` | Template for `secrets.h` (WiFi credentials) |
 | `EPD_1in54g.*`, `DEV_Config.*`, `GUI_Paint.*`, `font*.cpp`, `fonts.h` | Waveshare display driver and drawing library |
-| `TODO.md` | Planned improvements |
+| `TODO.md` (repo root) | Planned improvements |
 
 ## Other displays
 

@@ -7,9 +7,8 @@
 // SETUP
 //  1. Library Manager: install "ArduinoJson" (v7) and "DHT sensor library" (Adafruit,
 //     also installs "Adafruit Unified Sensor").
-//  2. Copy your working Waveshare demo folder, rename the folder AND the .ino
-//     to "weather_epaper", and replace the .ino content with this file.
-//     (DEV_Config.*, EPD_1in54g.*, GUI_Paint.*, fonts.* stay in the folder.)
+//  2. Open this .ino from its folder "ESP32_WEATHER_EPAPER" (the Arduino IDE needs the
+//     folder name to match). The Waveshare driver files are already in this folder.
 //  3. Copy secrets.example.h to secrets.h and fill in your WiFi name / password.
 //  4. Board: ESP32 Dev Module.
 
