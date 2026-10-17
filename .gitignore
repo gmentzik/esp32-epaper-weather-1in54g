@@ -1,0 +1,10 @@
+# WiFi credentials (template: secrets.example.h)
+secrets.h
+
+# local backups (some contain the WiFi password)
+*.bak*
+*.org
+
+# editor / build output (machine-specific paths, COM port)
+.vscode/
+build/
