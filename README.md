@@ -15,6 +15,9 @@ panel is powered down, so the image stays on screen while drawing almost no powe
 
 ## How it works
 
+At power-up or reset (not when waking from deep sleep) it first opens the
+[WiFi setup portal](#wifi-setup) for 2 minutes.
+
 Each time the ESP32 wakes up it:
 
 1. Reads the indoor sensor (DHT22).
@@ -87,8 +90,9 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
 3. **Libraries** (Library Manager):
    - `ArduinoJson` (v7)
    - `DHT sensor library` by Adafruit (also install `Adafruit Unified Sensor` when asked)
-4. **WiFi credentials:** in the sketch folder, copy `secrets.example.h` to `secrets.h` and
-   fill in your WiFi name and password. `secrets.h` is in `.gitignore`, so it is never committed.
+4. **WiFi credentials:** set them from your phone with the [WiFi setup portal](#wifi-setup),
+   no code change needed. Optional: to build in a default, copy `secrets.example.h` to
+   `secrets.h` in the sketch folder and fill it in. `secrets.h` is in `.gitignore`, so it is never committed.
 5. **Settings** at the top of `ESP32_WEATHER_EPAPER.ino`:
 
    | Setting | Default | Meaning |
@@ -98,16 +102,35 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
    | `REFRESH_MINUTES` | `15` | Time between updates. Keep it at 3 or more (Waveshare recommendation) |
    | `RETRY_MINUTES` | `1` | Base retry wait after a failure |
    | `MAX_FAIL_COUNT` | `15` | Maximum backoff steps |
+   | `SETUP_PORTAL_SECONDS` | `120` | How long the WiFi setup portal stays open after power-up |
    | `DEBUG_LOG` | `1` | `1` = progress on the Serial Monitor (115200 baud), `0` = silent for battery use |
 
 6. **Board:** Tools → Board → *ESP32 Dev Module*, select the COM port, then Upload.
 
 Keep the sketch folder named `ESP32_WEATHER_EPAPER`. The Arduino IDE needs it to match the `.ino` file name.
 
+## WiFi setup
+
+After every power-up or press of EN (reset), the display shows a **WIFI SETUP** screen and
+the ESP32 opens its own WiFi network for 2 minutes:
+
+1. On your phone, join the WiFi network **`Weather-Setup`**, password **`44444444`**
+   (also shown on the screen; change `SETUP_AP_PASS` in `wifi_setup.h`, at least 8 characters).
+2. The setup page usually opens by itself. If not, open **http://192.168.4.1** in the browser.
+3. Pick or type your WiFi name, enter the password and press **Save**.
+   Press **Skip** to keep the current network and start right away.
+
+The station then connects and shows the weather. If nobody connects within 2 minutes, it
+continues with the saved network. The credentials are stored in the ESP32's flash (NVS),
+so they survive deep sleep, resets and power loss. Timer wake-ups from deep sleep never open
+the portal, so it costs no battery in normal running.
+
+The ESP32 only supports 2.4 GHz WiFi. If the password was wrong, press EN and set it again.
+
 ## First start
 
 1. Open the Serial Monitor at 115200 baud.
-2. Press EN (reset) on the ESP32.
+2. Press EN (reset) on the ESP32 and set up WiFi as described above.
 3. You should see the indoor reading, `WiFi connected`, `Fetch OK`, and then the panel
    refresh, which takes about 15-20 s.
 4. The ESP32 then deep-sleeps for `REFRESH_MINUTES` and repeats.
@@ -118,7 +141,7 @@ Keep the sketch folder named `ESP32_WEATHER_EPAPER`. The Arduino IDE needs it to
 |---|---|
 | Upload fails with "Wrong boot mode" | Hold BOOT, tap EN, release BOOT, then upload again |
 | `Indoor sensor read failed`, `--` on screen | DHT22 data wire on GPIO32, 3V3 power, pull-up resistor |
-| `WiFi failed` | SSID and password in `secrets.h`; the ESP32 only supports 2.4 GHz WiFi |
+| `WiFi failed` | Press EN and re-enter WiFi name and password in the setup portal; the ESP32 only supports 2.4 GHz WiFi |
 | Display stays blank | Wiring, BS jumper at 0, BUSY pin connected |
 
 ## Project files
@@ -130,7 +153,8 @@ All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
 | `ESP32_WEATHER_EPAPER.ino` | Main program: WiFi, fetch, layout, sleep and retry logic |
 | `local_sensor.cpp/.h` | Indoor sensor (DHT22) reading |
 | `weather_icons.cpp/.h` | Weather icons drawn for each condition |
-| `secrets.example.h` | Template for `secrets.h` (WiFi credentials) |
+| `wifi_setup.cpp/.h` | WiFi setup portal (access point, web page, saving credentials) |
+| `secrets.example.h` | Template for the optional `secrets.h` (default WiFi credentials) |
 | `EPD_1in54g.*`, `DEV_Config.*`, `GUI_Paint.*`, `font*.cpp`, `fonts.h` | Waveshare display driver and drawing library |
 | `TODO.md` (repo root) | Planned improvements |
 
