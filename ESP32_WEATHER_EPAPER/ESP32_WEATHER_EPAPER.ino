@@ -4,6 +4,8 @@
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
 // deep-sleeps the ESP32 until the next refresh.
+// The bottom half of the screen alternates on every refresh between views:
+// a 3-day forecast and a picture (see "bottom area").
 //
 // SETUP
 //  1. Library Manager: install "ArduinoJson" (v7) and "DHT sensor library" (Adafruit,
@@ -56,6 +58,7 @@
 #include "weather_icons.h"
 #include "local_sensor.h"
 #include "wifi_setup.h"
+#include "bottom_image.h"
 
 // ---------- settings ----------
 
@@ -85,12 +88,26 @@ const uint32_t SETUP_PORTAL_SECONDS = 120;
 
 static UBYTE img[((EPD_1IN54G_WIDTH + 3) / 4) * EPD_1IN54G_HEIGHT];
 
+// One forecast day for the bottom area.
+struct DayForecast {
+  int code;            // WMO weather code
+  float tmax, tmin;
+  int rain;            // max. chance of rain, %
+  uint8_t wday;        // 0 = Sunday
+};
+
 struct Weather {
   float temp, feels, wind;
   int hum, code;
   char hhmm[6];
   char ddmm[6];
+  DayForecast days[3];   // tomorrow and the 2 days after
+  bool haveDays;         // false if the forecast part of the reply was missing
 };
+
+// Views for the bottom area (see "bottom area" below). Defined up here, before any
+// function, so the prototypes the Arduino IDE generates can use the type.
+enum BottomView { VIEW_FORECAST, VIEW_IMAGE };
 
 // Kept in RTC memory so they survive deep sleep.
 RTC_DATA_ATTR static Weather lastW;
@@ -132,6 +149,13 @@ static int beaufort(float kmh) {
   return b;
 }
 
+// Day of the week, 0 = Sunday (Sakamoto's method).
+static uint8_t dayOfWeek(int y, int m, int d) {
+  static const int T[12] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+  if (m < 3) y -= 1;
+  return (y + y / 4 - y / 100 + y / 400 + T[m - 1] + d) % 7;
+}
+
 // Picks the icon for a WMO weather code (same ranges as wmoText). Icons live in weather_icons.cpp.
 static void drawWeatherIcon(int c, int cx, int cy) {
   LOG("Icon for code %d: %s\n", c, wmoText(c));
@@ -150,11 +174,14 @@ static bool fetchWeather(Weather &w) {
   WiFiClientSecure client;
   client.setInsecure();  // skips certificate check; fine for public weather data
 
-  char url[300];
+  // "daily" with forecast_days=4 gives today (index 0) plus the 3 days shown in the bottom area.
+  char url[400];
   snprintf(url, sizeof(url),
            "https://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f"
            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
-           "wind_speed_10m,weather_code&timezone=auto",
+           "wind_speed_10m,weather_code"
+           "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+           "&forecast_days=4&timezone=auto",
            LAT, LON);
 
   HTTPClient http;
@@ -202,6 +229,28 @@ static bool fetchWeather(Weather &w) {
     memcpy(w.ddmm + 3, ts + 5, 2);
     w.ddmm[5] = 0;
   }
+
+  // Forecast for the bottom area. Missing data only hides the forecast, the fetch still counts as OK.
+  w.haveDays = false;
+  JsonObject daily = doc["daily"];
+  if (!daily.isNull() && daily["time"].size() >= 4) {
+    w.haveDays = true;
+    for (int i = 0; i < 3; i++) {
+      int k = i + 1;   // skip today
+      DayForecast &d = w.days[i];
+      d.code = daily["weather_code"][k] | -1;
+      d.tmax = daily["temperature_2m_max"][k] | 0.0f;
+      d.tmin = daily["temperature_2m_min"][k] | 0.0f;
+      d.rain = daily["precipitation_probability_max"][k] | 0;   // can be null; then 0
+      int yy = 0, mm = 0, dd = 0;
+      const char *date = daily["time"][k] | "";   // e.g. "2026-10-31"
+      if (sscanf(date, "%d-%d-%d", &yy, &mm, &dd) == 3 && mm >= 1 && mm <= 12) {
+        d.wday = dayOfWeek(yy, mm, dd);
+      } else {
+        w.haveDays = false;   // without a date the day names would be wrong
+      }
+    }
+  }
   return true;
 }
 
@@ -219,14 +268,20 @@ static bool fetchWeather(Weather &w) {
 #define TILE_Y    69    // tile titles; values go 13 px lower
 #define DIVIDER_Y 105
 
-// One reading: the number in big black Font20 and its unit in small red Font12,
-// bottoms lined up. Returns the x just after the unit, so the next value can follow.
-// Font20 is 14 px and Font12 7 px wide; a reading wraps if it runs past x 199.
-static int drawReading(int x, int y, const char *num, const char *unit, sFONT *unitFont = &Font12) {
-  Paint_DrawString_EN(x, y, num, &Font20, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  x += Font20.Width * strlen(num);
-  Paint_DrawString_EN(x, y + Font20.Height - unitFont->Height, unit, unitFont, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+// One reading: the number in black (big Font20 unless told otherwise) and its unit in
+// small red Font12, bottoms lined up. Returns the x just after the unit, so the next
+// value can follow. Font20 is 14 px and Font12 7 px wide; a reading wraps if it runs past x 199.
+static int drawReading(int x, int y, const char *num, const char *unit,
+                       sFONT *numFont = &Font20, sFONT *unitFont = &Font12) {
+  Paint_DrawString_EN(x, y, num, numFont, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  x += numFont->Width * strlen(num);
+  Paint_DrawString_EN(x, y + numFont->Height - unitFont->Height, unit, unitFont, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
   return x + unitFont->Width * strlen(unit);
+}
+
+// Width in px of a reading drawn by drawReading, used to centre it.
+static int readingWidth(const char *num, const char *unit, sFONT *numFont, sFONT *unitFont = &Font12) {
+  return numFont->Width * strlen(num) + unitFont->Width * strlen(unit);
 }
 
 // Small black Font12 title above a tile.
@@ -274,6 +329,96 @@ static void startImage() {
   Paint_Clear(EPD_1IN54G_WHITE);
 }
 
+// ---------- bottom area ----------
+// Everything below the divider: 200 x 94 px. It shows one "view" per panel refresh and
+// moves on to the next view in BOTTOM_ROTATION after each refresh.
+// To add a view: add it to the BottomView enum (near struct Weather), write a
+// drawBottom...() function for it, add a case in drawBottom(), and list it in BOTTOM_ROTATION.
+#define BOTTOM_Y (DIVIDER_Y + 1)                  // 106
+#define BOTTOM_W EPD_1IN54G_WIDTH                 // 200
+#define BOTTOM_H (EPD_1IN54G_HEIGHT - BOTTOM_Y)   // 94
+
+static const BottomView BOTTOM_ROTATION[] = { VIEW_FORECAST, VIEW_IMAGE };
+static const uint8_t BOTTOM_VIEWS = sizeof(BOTTOM_ROTATION) / sizeof(BOTTOM_ROTATION[0]);
+RTC_DATA_ATTR static uint8_t bottomIndex = 0;   // which entry of BOTTOM_ROTATION is next
+
+static const char *DAY_NAMES[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+
+// Font12 text centred horizontally on cx.
+static void drawCentered(int cx, int y, const char *s) {
+  Paint_DrawString_EN(cx - Font12.Width * strlen(s) / 2, y, s, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+}
+
+// View 1: the next 3 days in three 66 px columns: day name, icon, max/min, chance of rain.
+// w = nullptr (no weather ever fetched) or no forecast data shows "No forecast".
+static void drawBottomForecast(const Weather *w) {
+  if (w == nullptr || !w->haveDays) {
+    drawCentered(BOTTOM_W / 2, BOTTOM_Y + (BOTTOM_H - Font12.Height) / 2, "No forecast");
+    return;
+  }
+  char buf[16];
+  for (int i = 0; i < 3; i++) {
+    const DayForecast &d = w->days[i];
+    int x0 = i * 67;          // columns at x 0, 67, 134
+    int cx = x0 + 33;         // column centre
+    if (i > 0) {              // thin line between columns, at x 66 and 133
+      Paint_DrawLine(x0 - 1, BOTTOM_Y + 2, x0 - 1, EPD_1IN54G_HEIGHT - 2, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+    }
+
+    drawCentered(cx, BOTTOM_Y + 2, DAY_NAMES[d.wday % 7]);    // y 108..119
+    drawWeatherIcon(d.code, cx, BOTTOM_Y + 31);                // icons span cy-15..cy+25: y 122..162
+
+    // "24/15" + "C" in Font16 is 62 px; longer text such as "-12/-15" drops to Font12 to stay in the column
+    snprintf(buf, sizeof(buf), "%d/%d", (int)lroundf(d.tmax), (int)lroundf(d.tmin));
+    sFONT *f = strlen(buf) <= 5 ? &Font16 : &Font12;
+    drawReading(cx - readingWidth(buf, "C", f) / 2, BOTTOM_Y + 59, buf, "C", f);   // y 165..181
+
+    snprintf(buf, sizeof(buf), "%d", d.rain);
+    drawReading(cx - readingWidth(buf, "%", &Font12) / 2, BOTTOM_Y + 80, buf, "%", &Font12);   // y 186..198
+  }
+}
+
+// View 2: a picture from bottom_image.cpp (made with tools/img2epd.ps1), centred in the area.
+// The data uses the panel's own 2-bit colour codes, 4 pixels per byte, leftmost pixel in the top bits.
+static void drawBottomImage() {
+  static_assert(BOTTOM_IMAGE_W <= BOTTOM_W && BOTTOM_IMAGE_H <= BOTTOM_H,
+                "bottom_image is larger than the bottom area (200 x 94)");
+  const int x0 = (BOTTOM_W - BOTTOM_IMAGE_W) / 2;
+  const int y0 = BOTTOM_Y + (BOTTOM_H - BOTTOM_IMAGE_H) / 2;
+  const int rowBytes = (BOTTOM_IMAGE_W + 3) / 4;
+  for (int y = 0; y < BOTTOM_IMAGE_H; y++) {
+    for (int x = 0; x < BOTTOM_IMAGE_W; x++) {
+      uint8_t b = bottomImage[y * rowBytes + x / 4];
+      uint8_t color = (b >> (6 - 2 * (x % 4))) & 0x3;
+      Paint_SetPixel(x0 + x, y0 + y, color);
+    }
+  }
+}
+
+static const char *viewName(BottomView v) {
+  switch (v) {
+    case VIEW_FORECAST: return "forecast";
+    case VIEW_IMAGE:    return "image";
+  }
+  return "?";
+}
+
+// Draws the bottom area with the view that is due now. w may be nullptr (no data yet).
+static void drawBottom(const Weather *w) {
+  BottomView v = BOTTOM_ROTATION[bottomIndex % BOTTOM_VIEWS];
+  LOG("Bottom view: %s\n", viewName(v));
+  switch (v) {
+    case VIEW_FORECAST: drawBottomForecast(w); break;
+    case VIEW_IMAGE:    drawBottomImage();     break;
+  }
+}
+
+// Call after each real panel refresh, so the next refresh shows the next view.
+static void nextBottomView() {
+  bottomIndex = (bottomIndex + 1) % BOTTOM_VIEWS;
+}
+// ---------- end of bottom area ----------
+
 // stale = true when the data is old because the last update failed:
 // the update time in the header is then drawn white on red.
 static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, bool stale = false) {
@@ -305,6 +450,7 @@ static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, b
 
   drawLocal(loc, locOk);
   drawDivider();
+  drawBottom(&w);
 }
 
 // Used when the very first fetch fails and there is no old data to show.
@@ -315,6 +461,7 @@ static void drawNoData(const LocalReading &loc, bool locOk) {
   Paint_DrawString_EN(TEXT_X, 27, "No data", &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
   drawLocal(loc, locOk);
   drawDivider();
+  drawBottom(nullptr);
 }
 
 // Shown while the WiFi setup portal is open, so the user knows what to join.
@@ -400,6 +547,11 @@ void setup() {
     if (ok) {
       LOG("Weather: %.1f C (feels %.1f), hum %d%%, wind %.0f km/h (Bft %d), code %d (%s), %s %s\n",
           w.temp, w.feels, w.hum, w.wind, beaufort(w.wind), w.code, wmoText(w.code), w.ddmm, w.hhmm);
+      if (!w.haveDays) LOG("No forecast in the reply\n");
+      for (int i = 0; i < 3 && w.haveDays; i++) {
+        LOG("Day %d: %s code %d, %.0f/%.0f C, rain %d%%\n", i + 1, DAY_NAMES[w.days[i].wday % 7],
+            w.days[i].code, w.days[i].tmax, w.days[i].tmin, w.days[i].rain);
+      }
     }
   } else {
     LOG("WiFi failed after %u ms (status %d)\n", (unsigned)(millis() - t0), (int)WiFi.status());
@@ -462,6 +614,8 @@ void setup() {
   shownLocOk = locOk;
   shownTemp = newTemp;
   shownHum = newHum;
+  // The bottom area alternates: the next refresh shows the next view.
+  nextBottomView();
 
   // 3. sleep until next refresh (retry sooner if this attempt failed)
   goToSleep(ok ? REFRESH_MINUTES * 60 : retrySeconds());
