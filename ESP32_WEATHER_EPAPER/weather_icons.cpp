@@ -28,8 +28,9 @@ static void drawCloud(int cx, int cy) {
 // ---------- icons ----------
 // Each comment gives the icon's size (width x height in px) and its extent
 // relative to the centre point (cx, cy).
-// The sketch draws them at cx=165, cy=52. The condition text starts at y=80,
-// so icons should stay above about cy+27.
+// The sketch draws them at cx=26, cy=41 (top left, under the header). The condition
+// text starts at x=54 and the tiles at y=69, so icons should stay within about
+// cx-22..cx+25 and cy-15..cy+25.
 
 // 34 x 34: x cx-17..cx+17, y cy-13..cy+21
 void iconClear(int cx, int cy) {

@@ -5,13 +5,38 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature and humidity from a local sensor. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
+Current version: **0.3** (see [Version history](#version-history)).
+
 ## What it shows
 
-- City name in the header
-- Outdoor temperature, weather condition text and icon
-- "Feels like" temperature, humidity and wind speed
-- Indoor temperature and humidity (`--` if the sensor can't be read)
-- Time and date of the last successful update
+- **Header:** city name on the left, date and time of the last successful update on the right
+- **Weather icon** on the left, with the condition text (e.g. "Partly cloudy") to its right
+- **Outdoor temperature and humidity**, without titles (the units say what they are)
+- **FEELS:** "feels like" temperature, in whole degrees
+- **WIND:** wind force in Beaufort (0-12 Bft). Open-Meteo has no Beaufort option, so the
+  ESP32 converts it from km/h.
+- **INDOOR:** temperature and humidity from the DHT22 (`--` if the sensor can't be read)
+
+Numbers are black and their units (C, %, Bft) are red, so they are easy to tell apart.
+The weather takes only the top half of the screen. The area below the divider (about
+200×94 px) is free for more information later.
+
+### Screen layout
+
+```
++------------------------------+
+|ATHENS            07/10 21:45 |  black header: city, last update
+|==============================|  yellow line
+| (icon)  Partly cloudy        |  condition text
+| (icon)  23.5C     65%        |  outdoor temperature, humidity
+|FEELS   WIND        INDOOR    |  tile titles
+|21C     4Bft        22C 55%   |  values, units in red
+|------------------------------|  divider (y 105)
+|                              |
+|     free for future info     |
+|                              |
++------------------------------+
+```
 
 ## How it works
 
@@ -27,8 +52,9 @@ Each time the ESP32 wakes up it:
 When the update fails (no WiFi or the API is unreachable):
 
 - **After at least one good update:** the last known weather stays on screen and the
-  "Updated ..." line turns white on red.
-- **If no data was ever fetched:** a "No data / Update failed" page is shown.
+  update time in the header turns white on red.
+- **If no data was ever fetched:** the header shows a red "Update failed", and "No data"
+  appears next to a "?" icon. The indoor reading is still shown.
 - **Retries back off:** each failure in a row waits one step longer (1, 2, 3 ... minutes,
   up to 15 steps), so a long outage doesn't drain the battery.
 - **No needless refreshes:** while it keeps failing, the panel is only refreshed again
@@ -164,3 +190,28 @@ The drawing code is written for the 1.54" (G) panel: 200×200 pixels, 4 colours 
 Waveshare's `EPD_1IN54G_*` driver calls. Other Waveshare panels can be supported by swapping
 the driver files and adjusting colours and layout. See `TODO.md` for the planned clean-up
 that will make this easier.
+
+## Version history
+
+### 0.3
+- Compact screen layout: the weather now fits in the top half, leaving about half of the
+  screen free (below a divider) for more information later.
+- Weather icon on the left with the condition text beside it.
+- Feels, Wind and Indoor are shown as titled tiles. Temperature and humidity have no titles.
+- Wind is shown in Beaufort (Bft) instead of km/h.
+- Units (C, %, Bft) are drawn in red so they stand out from the numbers.
+- The last-update time moved into the header. It turns red when updates fail.
+
+### 0.2
+- WiFi setup portal: after power-up or reset the ESP32 opens the `Weather-Setup` network
+  for 2 minutes, so the WiFi name and password can be set from a phone. They are saved in
+  flash (NVS), so `secrets.h` is now optional.
+- The sketch moved into the `ESP32_WEATHER_EPAPER/` subfolder, so a clone or ZIP opens
+  directly in the Arduino IDE.
+
+### 0.1
+- First version: current weather from Open-Meteo with condition icons, indoor temperature
+  and humidity from a DHT22, and deep sleep between updates.
+- When an update fails, the last good weather stays on screen with a red status, and
+  retries back off step by step.
+- WiFi name and password set in `secrets.h`.

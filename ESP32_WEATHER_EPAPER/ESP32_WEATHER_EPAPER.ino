@@ -1,4 +1,5 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
+// Version 0.3 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
@@ -123,6 +124,14 @@ static const char *wmoText(int c) {
   return "Unknown";
 }
 
+// Beaufort force 0..12 from km/h. LIMITS[i] is the lowest speed of force i+1.
+static int beaufort(float kmh) {
+  static const float LIMITS[12] = {1, 6, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118};
+  int b = 0;
+  while (b < 12 && kmh >= LIMITS[b]) b++;
+  return b;
+}
+
 // Picks the icon for a WMO weather code (same ranges as wmoText). Icons live in weather_icons.cpp.
 static void drawWeatherIcon(int c, int cx, int cy) {
   LOG("Icon for code %d: %s\n", c, wmoText(c));
@@ -196,90 +205,122 @@ static bool fetchWeather(Weather &w) {
   return true;
 }
 
-// One indoor reading: the number in big Font20 and its unit in small Font12 on the
-// same baseline. Font20 is 14 px wide, so "-22" or "100" (3 chars = 42 px) plus a 7 px
-// unit just fits the 49 px strip (x 151..200); a Font20 unit would not fit and wrap.
-static void drawReading(int y, const char *num, char unit) {
-  char u[2] = {unit, 0};
-  Paint_DrawString_EN(151, y, num, &Font20, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(151 + 14 * strlen(num), y + 8, u, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+// Screen layout (200 x 200). Weather uses the top part down to the divider;
+// everything below it (y 106..199) is free for other information.
+//   y  0..20  black header: city left, update time right
+//   y 21..23  yellow accent line
+//   y 26..66  icon left (cx 26), description right of it, temp + humidity below that
+//   y 69..102 tiles: FEELS (x 2), WIND (x 54, under the temp), INDOOR (x 126)
+//   y 105     divider
+// Note: Paint_DrawString_EN takes the BACKGROUND colour first, then the TEXT colour.
+#define ICON_X    26
+#define ICON_Y    41
+#define TEXT_X    54    // description, temperature and the WIND tile start here
+#define TILE_Y    69    // tile titles; values go 13 px lower
+#define DIVIDER_Y 105
+
+// One reading: the number in big black Font20 and its unit in small red Font12,
+// bottoms lined up. Returns the x just after the unit, so the next value can follow.
+// Font20 is 14 px and Font12 7 px wide; a reading wraps if it runs past x 199.
+static int drawReading(int x, int y, const char *num, const char *unit, sFONT *unitFont = &Font12) {
+  Paint_DrawString_EN(x, y, num, &Font20, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  x += Font20.Width * strlen(num);
+  Paint_DrawString_EN(x, y + Font20.Height - unitFont->Height, unit, unitFont, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+  return x + unitFont->Width * strlen(unit);
 }
 
-// Indoor box in the free strip right of Feels/Humidity/Wind (x 151..200, y 110..170).
+// Small black Font12 title above a tile.
+static void drawTitle(int x, const char *title) {
+  Paint_DrawString_EN(x, TILE_Y, title, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+}
+
+// Black band with the city on the left and a short text (time or status) on the right,
+// then the yellow accent line. red = true draws the right text white on red (stale data).
+static void drawHeader(const char *right, bool red) {
+  Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 20, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawRectangle(0, 21, EPD_1IN54G_WIDTH, 24, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawString_EN(4, 2, CITY, &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  int x = EPD_1IN54G_WIDTH - 4 - Font12.Width * strlen(right);   // right-aligned
+  if (red) Paint_DrawString_EN(x, 4, right, &Font12, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
+  else     Paint_DrawString_EN(x, 4, right, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+}
+
+// Indoor tile at x 126: temperature and humidity side by side (126..198).
 // ok = false (sensor read failed) shows "--" instead of numbers.
+// A future pressure reading fits on a second line at y 104 ("1013" + Font8 "hPa" = 71 px);
+// move DIVIDER_Y down then.
 static void drawLocal(const LocalReading &loc, bool ok) {
   char buf[8];
-  Paint_DrawString_EN(154, 110, "INDOOR", &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  drawTitle(126, "INDOOR");
 
   // lroundf here and in setup()'s "indoor changed?" check, so both round the same way
   if (ok) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.temp));
   else    snprintf(buf, sizeof(buf), "--");
-  drawReading(128, buf, 'C');
+  int x = drawReading(126, TILE_Y + 13, buf, "C");
 
   if (ok) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.hum));
   else    snprintf(buf, sizeof(buf), "--");
-  drawReading(150, buf, '%');
+  drawReading(x + 3, TILE_Y + 13, buf, "%");
 }
 
-// stale = true when the data is old because the last update failed:
-// the "Updated ..." line is then drawn white on red.
-static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, bool stale = false) {
-  char buf[32];
+static void drawDivider() {
+  Paint_DrawLine(0, DIVIDER_Y, EPD_1IN54G_WIDTH - 1, DIVIDER_Y, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+}
 
+static void startImage() {
   Paint_NewImage(img, EPD_1IN54G_WIDTH, EPD_1IN54G_HEIGHT, 0, EPD_1IN54G_WHITE);
   Paint_SetScale(4);
   Paint_SelectImage(img);
   Paint_Clear(EPD_1IN54G_WHITE);
+}
 
-  // header band + yellow accent line
-  Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 30, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawRectangle(0, 31, EPD_1IN54G_WIDTH, 35, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawString_EN(8, 3, CITY, &Font24, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+// stale = true when the data is old because the last update failed:
+// the update time in the header is then drawn white on red.
+static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, bool stale = false) {
+  char buf[16];
+  startImage();
 
-  snprintf(buf, sizeof(buf), "%.1f C", w.temp);
-  Paint_DrawString_EN(8, 46, buf, &Font24, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
+  snprintf(buf, sizeof(buf), "%s %s", w.ddmm, w.hhmm);
+  drawHeader(buf, stale);
 
-  drawWeatherIcon(w.code, 165, 52);   // right of the temperature, above the condition text
+  drawWeatherIcon(w.code, ICON_X, ICON_Y);
+  // "Partly cloudy" (13 chars x 11 px) is the longest and ends at x 197
+  Paint_DrawString_EN(TEXT_X, 27, wmoText(w.code), &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
 
-  Paint_DrawString_EN(8, 80, wmoText(w.code), &Font20, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
+  // Temperature and humidity: no titles, the units say what they are.
+  // "-12.5C" ends at x 131, before the humidity at x 140.
+  snprintf(buf, sizeof(buf), "%.1f", w.temp);
+  drawReading(TEXT_X, 46, buf, "C");
+  snprintf(buf, sizeof(buf), "%d", w.hum);
+  drawReading(140, 46, buf, "%");
 
-  snprintf(buf, sizeof(buf), "Feels %.1f C", w.feels);
-  Paint_DrawString_EN(8, 115, buf, &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
+  // Feels is rounded like the indoor values, so "-12C" (49 px) stays left of the WIND tile.
+  drawTitle(2, "FEELS");
+  snprintf(buf, sizeof(buf), "%d", (int)lroundf(w.feels));
+  drawReading(2, TILE_Y + 13, buf, "C");
 
-  snprintf(buf, sizeof(buf), "Humidity %d%%", w.hum);
-  Paint_DrawString_EN(8, 137, buf, &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
-
-  snprintf(buf, sizeof(buf), "Wind %.0f km/h", w.wind);
-  Paint_DrawString_EN(8, 159, buf, &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
-
-  snprintf(buf, sizeof(buf), "Updated %s %s", w.ddmm, w.hhmm);
-  if (stale) Paint_DrawString_EN(8, 183, buf, &Font12, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
-  else       Paint_DrawString_EN(8, 183, buf, &Font12, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
+  drawTitle(TEXT_X, "WIND");
+  snprintf(buf, sizeof(buf), "%d", beaufort(w.wind));
+  drawReading(TEXT_X, TILE_Y + 13, buf, "Bft");
 
   drawLocal(loc, locOk);
+  drawDivider();
 }
 
 // Used when the very first fetch fails and there is no old data to show.
 static void drawNoData(const LocalReading &loc, bool locOk) {
-  Paint_NewImage(img, EPD_1IN54G_WIDTH, EPD_1IN54G_HEIGHT, 0, EPD_1IN54G_WHITE);
-  Paint_SetScale(4);
-  Paint_SelectImage(img);
-  Paint_Clear(EPD_1IN54G_WHITE);
-  Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 30, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawRectangle(0, 31, EPD_1IN54G_WIDTH, 35, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawString_EN(8, 3, CITY, &Font24, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(8, 80, "No data", &Font20, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
-  Paint_DrawString_EN(8, 183, "Update failed", &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+  startImage();
+  drawHeader("Update failed", true);
+  iconUnknown(ICON_X, ICON_Y);
+  Paint_DrawString_EN(TEXT_X, 27, "No data", &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
   drawLocal(loc, locOk);
+  drawDivider();
 }
 
 // Shown while the WiFi setup portal is open, so the user knows what to join.
 static void drawSetupScreen() {
   char buf[24];
-  Paint_NewImage(img, EPD_1IN54G_WIDTH, EPD_1IN54G_HEIGHT, 0, EPD_1IN54G_WHITE);
-  Paint_SetScale(4);
-  Paint_SelectImage(img);
-  Paint_Clear(EPD_1IN54G_WHITE);
+  startImage();
   Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 30, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
   Paint_DrawRectangle(0, 31, EPD_1IN54G_WIDTH, 35, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
   Paint_DrawString_EN(8, 3, "WIFI SETUP", &Font24, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
@@ -357,8 +398,8 @@ void setup() {
     ok = fetchWeather(w);
     LOG("Fetch %s\n", ok ? "OK" : "FAILED");
     if (ok) {
-      LOG("Weather: %.1f C (feels %.1f), hum %d%%, wind %.0f km/h, code %d (%s), %s %s\n",
-          w.temp, w.feels, w.hum, w.wind, w.code, wmoText(w.code), w.ddmm, w.hhmm);
+      LOG("Weather: %.1f C (feels %.1f), hum %d%%, wind %.0f km/h (Bft %d), code %d (%s), %s %s\n",
+          w.temp, w.feels, w.hum, w.wind, beaufort(w.wind), w.code, wmoText(w.code), w.ddmm, w.hhmm);
     }
   } else {
     LOG("WiFi failed after %u ms (status %d)\n", (unsigned)(millis() - t0), (int)WiFi.status());
