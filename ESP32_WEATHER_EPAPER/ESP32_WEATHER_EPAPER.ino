@@ -9,7 +9,9 @@
 //     also installs "Adafruit Unified Sensor").
 //  2. Open this .ino from its folder "ESP32_WEATHER_EPAPER" (the Arduino IDE needs the
 //     folder name to match). The Waveshare driver files are already in this folder.
-//  3. Copy secrets.example.h to secrets.h and fill in your WiFi name / password.
+//  3. WiFi: after power-up / reset, join the "Weather-Setup" network with a phone and
+//     enter your WiFi name and password (open for SETUP_PORTAL_SECONDS).
+//     Optional default: copy secrets.example.h to secrets.h and fill it in.
 //  4. Board: ESP32 Dev Module.
 
 /*
@@ -52,7 +54,7 @@
 #include "fonts.h"
 #include "weather_icons.h"
 #include "local_sensor.h"
-#include "secrets.h"   // WIFI_SSID / WIFI_PASS, kept out of git
+#include "wifi_setup.h"
 
 // ---------- settings ----------
 
@@ -67,6 +69,9 @@ const uint32_t RETRY_MINUTES = 1;    // used when WiFi/fetch fails
 // Each failure in a row adds one more RETRY_MINUTES to the wait (1, 2, 3 ... min),
 // up to this many times, so a long outage doesn't drain the battery with retries.
 const uint8_t MAX_FAIL_COUNT = 15;
+
+// WiFi setup portal: open this long after power-up / reset, never after deep sleep.
+const uint32_t SETUP_PORTAL_SECONDS = 120;
 
 #define DEBUG_LOG 1   // 1 = print progress to the Serial Monitor, 0 = silent (battery runs)
 // ------------------------------
@@ -268,6 +273,26 @@ static void drawNoData(const LocalReading &loc, bool locOk) {
   drawLocal(loc, locOk);
 }
 
+// Shown while the WiFi setup portal is open, so the user knows what to join.
+static void drawSetupScreen() {
+  char buf[24];
+  Paint_NewImage(img, EPD_1IN54G_WIDTH, EPD_1IN54G_HEIGHT, 0, EPD_1IN54G_WHITE);
+  Paint_SetScale(4);
+  Paint_SelectImage(img);
+  Paint_Clear(EPD_1IN54G_WHITE);
+  Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 30, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawRectangle(0, 31, EPD_1IN54G_WIDTH, 35, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawString_EN(8, 3, "WIFI SETUP", &Font24, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(8, 48, "Join WiFi:", &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(8, 68, SETUP_AP_NAME, &Font16, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
+  Paint_DrawString_EN(8, 88, "Pass " SETUP_AP_PASS, &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(8, 114, "Then open:", &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(8, 134, SETUP_AP_IP, &Font16, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
+  snprintf(buf, sizeof(buf), "Open for %u min", (unsigned)(SETUP_PORTAL_SECONDS / 60));
+  Paint_DrawString_EN(8, 162, buf, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(8, 176, "then weather starts", &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+}
+
 // Same shutdown steps every time the panel has been woken, so no path leaves it powered.
 static void panelOff() {
   EPD_1IN54G_Sleep();          // important: never leave the panel powered
@@ -292,7 +317,24 @@ void setup() {
   LOG("\n=== Wake: cause=%d haveLast=%d errShown=%d failCount=%u ===\n",
       (int)esp_sleep_get_wakeup_cause(), haveLast, errShown, (unsigned)failCount);
 
-  // 0. indoor sensor (independent of WiFi, so it is available even if the fetch fails)
+  // 0a. WiFi setup portal, only at power-up / reset. A timer wake from deep sleep skips it.
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
+    LOG("Power-up: showing setup screen, then portal '%s' for %u s\n",
+        SETUP_AP_NAME, (unsigned)SETUP_PORTAL_SECONDS);
+    if (DEV_Module_Init() == 0) {
+      drawSetupScreen();
+      EPD_1IN54G_Init();
+      EPD_1IN54G_Display(img);
+      panelOff();
+    } else {
+      LOG("DEV_Module_Init failed, portal runs without setup screen\n");
+      DEV_Module_Exit();
+    }
+    bool saved = runWifiSetupPortal(SETUP_PORTAL_SECONDS);
+    LOG(saved ? "New WiFi credentials saved\n" : "Setup portal closed, keeping current WiFi\n");
+  }
+
+  // 0b. indoor sensor (independent of WiFi, so it is available even if the fetch fails)
   LocalReading loc = {0, 0};
   bool locOk = readLocalSensor(loc);
   if (locOk) LOG("Indoor: %.1f C, %.0f %%\n", loc.temp, loc.hum);
@@ -301,9 +343,11 @@ void setup() {
   // 1. WiFi + fetch
   Weather w;
   bool ok = false;
-  LOG("Connecting to WiFi '%s'...\n", WIFI_SSID);
+  String ssid, pass;
+  getWifiCredentials(ssid, pass);   // saved by the setup portal, or secrets.h
+  LOG("Connecting to WiFi '%s'...\n", ssid.c_str());
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.begin(ssid.c_str(), pass.c_str());
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(250);
 
