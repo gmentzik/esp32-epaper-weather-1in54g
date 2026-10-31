@@ -157,6 +157,17 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
    | `SETUP_PORTAL_SECONDS` | `120` | How long the WiFi setup portal stays open after power-up |
    | `DEBUG_LOG` | `1` | `1` = progress on the Serial Monitor (115200 baud), `0` = silent for battery use |
 
+   **Finding `LAT` / `LON` for another place:**
+   - Open-Meteo's geocoding (free, no key): open this in a browser, with your city as `name`:
+     `https://geocoding-api.open-meteo.com/v1/search?name=Thessaloniki&count=5&language=en&format=json`
+     and copy `latitude` and `longitude` from the right entry (check `country` and `admin1`
+     if several places share the name).
+   - Or Google Maps: right-click the spot; the first line of the menu is `lat, lon`
+     (click it to copy).
+
+   Two decimals are enough (about 1 km); the sketch sends only two anyway. South and west are
+   negative, e.g. New York is `40.71`, `-74.01`. Also change `CITY` to match.
+
 6. **Board:** Tools → Board → *ESP32 Dev Module*, select the COM port, then Upload.
 
 Keep the sketch folder named `ESP32_WEATHER_EPAPER`. The Arduino IDE needs it to match the `.ino` file name.
