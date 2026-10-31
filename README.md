@@ -240,7 +240,7 @@ that will make this easier.
 - Wind is shown in Beaufort (Bft) instead of km/h.
 - Units (C, %, Bft) are drawn in red so they stand out from the numbers.
 - The last-update time moved into the header. It turns red when updates fail.
-- The bottom area alternates on every refresh between a 3-day forecast and a picture.
+- The bottom area alternates on every refresh between a 3-day forecast, an hourly temp/hum graph and a picture.
   The picture comes from `bottom_image.cpp`, made with the new `tools/img2epd.ps1` converter.
 
 ### 0.2
