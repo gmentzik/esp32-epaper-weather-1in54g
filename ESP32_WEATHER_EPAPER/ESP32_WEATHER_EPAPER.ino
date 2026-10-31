@@ -291,7 +291,11 @@ static bool fetchWeather(Weather &w) {
 //   y 26..66  icon left (cx 26), description right of it, temp + humidity below that
 //   y 69..102 tiles: FEELS (x 2), WIND (x 54, under the temp), INDOOR (x 126)
 //   y 105     divider
-// Note: Paint_DrawString_EN takes the BACKGROUND colour first, then the TEXT colour.
+// Note: Paint_DrawString_EN takes the BACKGROUND colour first, then the TEXT colour
+// (GUI_Paint.h names them the other way round, but the code swaps them):
+//   Paint_DrawString_EN(x, y, "Hello", &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+//                       pos   text     size     BACKGROUND        TEXT colour
+// Paint_DrawChar and Paint_DrawNum take the TEXT colour first.
 #define ICON_X    26
 #define ICON_Y    41
 #define TEXT_X    54    // description, temperature and the WIND tile start here
