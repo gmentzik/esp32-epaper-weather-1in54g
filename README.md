@@ -23,7 +23,9 @@ divider, 200×94 px) switches view on every refresh:
 
 1. **3-day forecast:** tomorrow and the next 2 days, each with the day name, icon,
    max/min temperature and chance of rain.
-2. **Picture:** an image from `bottom_image.cpp` (a sample picture at first; see
+2. **Hourly graph:** temperature (red) and humidity (black) for the next 12 hours, with
+   each one's min..max at the top and the hour every 3 hours along the bottom.
+3. **Picture:** an image from `bottom_image.cpp` (a sample picture at first; see
    [Custom picture](#custom-picture)).
 
 ### Screen layout
@@ -41,7 +43,7 @@ divider, 200×94 px) switches view on every refresh:
 | (icon) |  (icon)  |  (icon)  |
 | 24/15C |  22/14C  |  19/12C  |  max/min
 |  10%   |   60%    |   80%    |  chance of rain
-+------------------------------+  (view 2 shows the picture here)
++------------------------------+  (view 2: hourly graph, view 3: picture)
 ```
 
 The bottom area is drawn by `drawBottom()` in the "bottom area" section of the `.ino`.

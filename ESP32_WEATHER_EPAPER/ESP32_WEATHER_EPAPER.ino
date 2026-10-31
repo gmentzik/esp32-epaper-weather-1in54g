@@ -4,8 +4,8 @@
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
 // deep-sleeps the ESP32 until the next refresh.
-// The bottom half of the screen alternates on every refresh between views:
-// a 3-day forecast and a picture (see "bottom area").
+// The bottom half of the screen changes on every refresh between views:
+// a 3-day forecast, a 12-hour temperature/humidity graph and a picture (see "bottom area").
 //
 // SETUP
 //  1. Library Manager: install "ArduinoJson" (v7) and "DHT sensor library" (Adafruit,
@@ -68,7 +68,7 @@ const float LON = 23.73;
 
 // Full refresh takes ~15-20 s and Waveshare recommends >= 3 min between
 // refreshes. Keep this at 3 or more.
-const uint32_t REFRESH_MINUTES = 15;
+const uint32_t REFRESH_MINUTES = 10;
 const uint32_t RETRY_MINUTES = 1;    // used when WiFi/fetch fails
 // Each failure in a row adds one more RETRY_MINUTES to the wait (1, 2, 3 ... min),
 // up to this many times, so a long outage doesn't drain the battery with retries.
@@ -88,6 +88,9 @@ const uint32_t SETUP_PORTAL_SECONDS = 120;
 
 static UBYTE img[((EPD_1IN54G_WIDTH + 3) / 4) * EPD_1IN54G_HEIGHT];
 
+// Points in the hourly graph: the current hour and the 11 after it (12 fit 200 px well).
+#define HOURS_SHOWN 12
+
 // One forecast day for the bottom area.
 struct DayForecast {
   int code;            // WMO weather code
@@ -103,11 +106,15 @@ struct Weather {
   char ddmm[6];
   DayForecast days[3];   // tomorrow and the 2 days after
   bool haveDays;         // false if the forecast part of the reply was missing
+  int8_t htemp[HOURS_SHOWN];   // hourly temperature, rounded (small, as this lives in RTC memory)
+  uint8_t hhum[HOURS_SHOWN];   // hourly humidity, %
+  uint8_t hour0;               // hour of day (0..23) of the first point
+  bool haveHours;              // false if the hourly part of the reply was missing
 };
 
 // Views for the bottom area (see "bottom area" below). Defined up here, before any
 // function, so the prototypes the Arduino IDE generates can use the type.
-enum BottomView { VIEW_FORECAST, VIEW_IMAGE };
+enum BottomView { VIEW_FORECAST, VIEW_HOURLY, VIEW_IMAGE };
 
 // Kept in RTC memory so they survive deep sleep.
 RTC_DATA_ATTR static Weather lastW;
@@ -142,7 +149,9 @@ static const char *wmoText(int c) {
 }
 
 // Beaufort force 0..12 from km/h. LIMITS[i] is the lowest speed of force i+1.
+// Note: static makes function visible only from this module
 static int beaufort(float kmh) {
+  //Note: static is avoid reinit constant var at every function call. (memory optimization)
   static const float LIMITS[12] = {1, 6, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118};
   int b = 0;
   while (b < 12 && kmh >= LIMITS[b]) b++;
@@ -175,11 +184,13 @@ static bool fetchWeather(Weather &w) {
   client.setInsecure();  // skips certificate check; fine for public weather data
 
   // "daily" with forecast_days=4 gives today (index 0) plus the 3 days shown in the bottom area.
-  char url[400];
+  // "hourly" starts at 00:00 today (local time), so the current hour is also its index.
+  char url[480];
   snprintf(url, sizeof(url),
            "https://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f"
            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
            "wind_speed_10m,weather_code"
+           "&hourly=temperature_2m,relative_humidity_2m"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
            "&forecast_days=4&timezone=auto",
            LAT, LON);
@@ -248,6 +259,25 @@ static bool fetchWeather(Weather &w) {
         d.wday = dayOfWeek(yy, mm, dd);
       } else {
         w.haveDays = false;   // without a date the day names would be wrong
+      }
+    }
+  }
+
+  // Hourly graph: HOURS_SHOWN points from the current hour. Missing data only hides the graph.
+  w.haveHours = false;
+  JsonObject hourly = doc["hourly"];
+  int hour = strlen(ts) >= 16 ? atoi(ts + 11) : -1;   // "2026-10-07T21:45" -> 21
+  if (!hourly.isNull() && hour >= 0 && hour <= 23 &&
+      hourly["temperature_2m"].size() >= (size_t)(hour + HOURS_SHOWN) &&
+      hourly["relative_humidity_2m"].size() >= (size_t)(hour + HOURS_SHOWN)) {
+    // Make sure index "hour" really is this hour, e.g. "2026-10-07T21:00" vs "2026-10-07T21:45".
+    const char *t0 = hourly["time"][hour] | "";
+    if (strncmp(t0, ts, 13) == 0) {
+      w.haveHours = true;
+      w.hour0 = hour;
+      for (int i = 0; i < HOURS_SHOWN; i++) {
+        w.htemp[i] = (int8_t)lroundf(hourly["temperature_2m"][hour + i] | 0.0f);
+        w.hhum[i] = hourly["relative_humidity_2m"][hour + i] | 0;
       }
     }
   }
@@ -338,7 +368,7 @@ static void startImage() {
 #define BOTTOM_W EPD_1IN54G_WIDTH                 // 200
 #define BOTTOM_H (EPD_1IN54G_HEIGHT - BOTTOM_Y)   // 94
 
-static const BottomView BOTTOM_ROTATION[] = { VIEW_FORECAST, VIEW_IMAGE };
+static const BottomView BOTTOM_ROTATION[] = { VIEW_FORECAST, VIEW_HOURLY, VIEW_IMAGE };
 static const uint8_t BOTTOM_VIEWS = sizeof(BOTTOM_ROTATION) / sizeof(BOTTOM_ROTATION[0]);
 RTC_DATA_ATTR static uint8_t bottomIndex = 0;   // which entry of BOTTOM_ROTATION is next
 
@@ -378,7 +408,69 @@ static void drawBottomForecast(const Weather *w) {
   }
 }
 
-// View 2: a picture from bottom_image.cpp (made with tools/img2epd.ps1), centred in the area.
+// Smallest and largest of n values.
+static void minMax(const int *v, int n, int &lo, int &hi) {
+  lo = hi = v[0];
+  for (int i = 1; i < n; i++) {
+    if (v[i] < lo) lo = v[i];
+    if (v[i] > hi) hi = v[i];
+  }
+}
+
+// View 2: the next 12 hours as a graph. Temperature is a thick red line, humidity a thin
+// black one, each scaled to its own min..max (shown at the top). Hour labels every 3 hours.
+//   y 108..119  ranges: "14..19C" red on the left, "45..80%" black on the right
+//   y 124..180  plot, y 182 time axis
+//   y 186..197  hour labels
+// Note: Paint_DrawLine draws 1 px left/up of the given point (2X2 lines: 3 px wide, ending there).
+static void drawBottomHourly(const Weather *w) {
+  if (w == nullptr || !w->haveHours) {
+    drawCentered(BOTTOM_W / 2, BOTTOM_Y + (BOTTOM_H - Font12.Height) / 2, "No hourly data");
+    return;
+  }
+  int t[HOURS_SHOWN], h[HOURS_SHOWN];
+  for (int i = 0; i < HOURS_SHOWN; i++) {
+    t[i] = w->htemp[i];
+    h[i] = w->hhum[i];
+  }
+  int tLo, tHi, hLo, hHi;
+  minMax(t, HOURS_SHOWN, tLo, tHi);
+  minMax(h, HOURS_SHOWN, hLo, hHi);
+
+  // Each range is drawn in its line's colour, so the ranges double as the legend.
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d..%dC", tLo, tHi);
+  Paint_DrawString_EN(4, BOTTOM_Y + 2, buf, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+  snprintf(buf, sizeof(buf), "%d..%d%%", hLo, hHi);
+  Paint_DrawString_EN(BOTTOM_W - 4 - Font12.Width * strlen(buf), BOTTOM_Y + 2, buf, &Font12,
+                      EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+
+  // Minimum spans, so a nearly flat day stays a nearly flat line instead of a zig-zag.
+  int tSpan = tHi - tLo < 4 ? 4 : tHi - tLo;
+  int hSpan = hHi - hLo < 10 ? 10 : hHi - hLo;
+  const int X0 = 9, X1 = 192;                         // first and last point
+  const int Y0 = BOTTOM_Y + 20, Y1 = BOTTOM_Y + 74;   // top (126) and bottom (180) of the plot
+
+  int px = 0, pt = 0, ph = 0;   // previous point
+  for (int i = 0; i < HOURS_SHOWN; i++) {
+    int x = X0 + (X1 - X0) * i / (HOURS_SHOWN - 1);
+    int ty = Y1 - (Y1 - Y0) * (t[i] - tLo) / tSpan;
+    int hy = Y1 - (Y1 - Y0) * (h[i] - hLo) / hSpan;
+    if (i > 0) {
+      // humidity first, so the red temperature line stays on top where they cross
+      Paint_DrawLine(px, ph, x, hy, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+      Paint_DrawLine(px, pt, x, ty, EPD_1IN54G_RED, DOT_PIXEL_2X2, LINE_STYLE_SOLID);
+    }
+    px = x; pt = ty; ph = hy;
+    if (i % 3 == 0) {   // e.g. "21", "00", "03", "06"
+      snprintf(buf, sizeof(buf), "%02d", (w->hour0 + i) % 24);
+      drawCentered(x, BOTTOM_Y + 80, buf);
+    }
+  }
+  Paint_DrawLine(X0, Y1 + 3, X1, Y1 + 3, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);   // time axis, y 182
+}
+
+// View 3: a picture from bottom_image.cpp (made with tools/img2epd.ps1), centred in the area.
 // The data uses the panel's own 2-bit colour codes, 4 pixels per byte, leftmost pixel in the top bits.
 static void drawBottomImage() {
   static_assert(BOTTOM_IMAGE_W <= BOTTOM_W && BOTTOM_IMAGE_H <= BOTTOM_H,
@@ -398,6 +490,7 @@ static void drawBottomImage() {
 static const char *viewName(BottomView v) {
   switch (v) {
     case VIEW_FORECAST: return "forecast";
+    case VIEW_HOURLY:   return "hourly";
     case VIEW_IMAGE:    return "image";
   }
   return "?";
@@ -409,6 +502,7 @@ static void drawBottom(const Weather *w) {
   LOG("Bottom view: %s\n", viewName(v));
   switch (v) {
     case VIEW_FORECAST: drawBottomForecast(w); break;
+    case VIEW_HOURLY:   drawBottomHourly(w);   break;
     case VIEW_IMAGE:    drawBottomImage();     break;
   }
 }
@@ -551,6 +645,10 @@ void setup() {
       for (int i = 0; i < 3 && w.haveDays; i++) {
         LOG("Day %d: %s code %d, %.0f/%.0f C, rain %d%%\n", i + 1, DAY_NAMES[w.days[i].wday % 7],
             w.days[i].code, w.days[i].tmax, w.days[i].tmin, w.days[i].rain);
+      }
+      if (!w.haveHours) LOG("No hourly data in the reply\n");
+      for (int i = 0; i < HOURS_SHOWN && w.haveHours; i++) {
+        LOG("Hour %02d: %d C, %u%%\n", (w.hour0 + i) % 24, w.htemp[i], (unsigned)w.hhum[i]);
       }
     }
   } else {
