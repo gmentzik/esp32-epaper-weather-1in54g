@@ -1,5 +1,9 @@
 # TODO
 
+## Make bitmap bottom screen optional.
+Since not practical use at the moment make it so it can be disabled from setup screen.
+Later it will be used to fetch a prepared bitmap from local network with custom information similar to other e-ink solutions out there.
+
 ## Make the code easier to port to other e-paper displays
 The drawing code is currently tied to the Waveshare 1.54" (G) 4-color panel
 (about 47 uses of `EPD_1IN54G_*` in the .ino and weather_icons.cpp).
