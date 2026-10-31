@@ -56,6 +56,9 @@ optional `&countryCode=GR`).
 - [ ] **Fallback:** if the lookup fails or finds nothing, keep the old coordinates (or the
       `LAT`/`LON` defaults) and retry on a later wake.
 
+As 1st option: User can search the Lat Lon and in config form set the name , Lat and Lon.
+As 2nd option: Auto search will be an additional option. That way user can cover cases of API failure to connect / or fail to find.
+
 Things to handle:
 - Header room: Font16 is 11 px wide and the date/time starts near x 119, so about
   10 characters fit. Cut longer names.
