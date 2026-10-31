@@ -3,6 +3,7 @@
 ## Make bitmap bottom screen optional.
 Since not practical use at the moment make it so it can be disabled from setup screen.
 Later it will be used to fetch a prepared bitmap from local network with custom information similar to other e-ink solutions out there.
+When enabled user may also put the url path to fetch the image at setup.
 
 ## Make the code easier to port to other e-paper displays
 The drawing code is currently tied to the Waveshare 1.54" (G) 4-color panel
