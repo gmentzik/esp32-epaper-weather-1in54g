@@ -52,7 +52,7 @@
 #include <ArduinoJson.h>
 #include <esp_sleep.h>
 #include "DEV_Config.h"
-#include "EPD_1in54g.h"
+#include "panel.h"
 #include "GUI_Paint.h"
 #include "fonts.h"
 #include "weather_icons.h"
@@ -86,7 +86,7 @@ const uint32_t SETUP_PORTAL_SECONDS = 120;
   #define LOG(...) ((void)0)
 #endif
 
-static UBYTE img[((EPD_1IN54G_WIDTH + 3) / 4) * EPD_1IN54G_HEIGHT];
+static UBYTE img[PANEL_IMAGE_BYTES];
 
 // Points in the hourly graph: the current hour and the 11 after it (12 fit 200 px well).
 #define HOURS_SHOWN 12
@@ -284,7 +284,8 @@ static bool fetchWeather(Weather &w) {
   return true;
 }
 
-// Screen layout (200 x 200). Weather uses the top part down to the divider;
+// Screen layout (numbers are for 200 x 200; things tied to the right or bottom edge are
+// placed from EPD_WIDTH / EPD_HEIGHT). Weather uses the top part down to the divider;
 // everything below it (y 106..199) is free for other information.
 //   y  0..20  black header: city left, update time right
 //   y 21..23  yellow accent line
@@ -293,23 +294,25 @@ static bool fetchWeather(Weather &w) {
 //   y 105     divider
 // Note: Paint_DrawString_EN takes the BACKGROUND colour first, then the TEXT colour
 // (GUI_Paint.h names them the other way round, but the code swaps them):
-//   Paint_DrawString_EN(x, y, "Hello", &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
-//                       pos   text     size     BACKGROUND        TEXT colour
+//   Paint_DrawString_EN(x, y, "Hello", &Font16, COL_WHITE, COL_RED);
+//                       pos   text     size     BACKGROUND TEXT colour
 // Paint_DrawChar and Paint_DrawNum take the TEXT colour first.
 #define ICON_X    26
 #define ICON_Y    41
 #define TEXT_X    54    // description, temperature and the WIND tile start here
 #define TILE_Y    69    // tile titles; values go 13 px lower
 #define DIVIDER_Y 105
+#define HUM_X     (EPD_WIDTH - 60)   // 140
+#define INDOOR_X  (EPD_WIDTH - 74)   // 126
 
 // One reading: the number in black (big Font20 unless told otherwise) and its unit in
 // small red Font12, bottoms lined up. Returns the x just after the unit, so the next
 // value can follow. Font20 is 14 px and Font12 7 px wide; a reading wraps if it runs past x 199.
 static int drawReading(int x, int y, const char *num, const char *unit,
                        sFONT *numFont = &Font20, sFONT *unitFont = &Font12) {
-  Paint_DrawString_EN(x, y, num, numFont, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(x, y, num, numFont, COL_WHITE, COL_BLACK);
   x += numFont->Width * strlen(num);
-  Paint_DrawString_EN(x, y + numFont->Height - unitFont->Height, unit, unitFont, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+  Paint_DrawString_EN(x, y + numFont->Height - unitFont->Height, unit, unitFont, COL_WHITE, COL_RED);
   return x + unitFont->Width * strlen(unit);
 }
 
@@ -320,18 +323,18 @@ static int readingWidth(const char *num, const char *unit, sFONT *numFont, sFONT
 
 // Small black Font12 title above a tile.
 static void drawTitle(int x, const char *title) {
-  Paint_DrawString_EN(x, TILE_Y, title, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(x, TILE_Y, title, &Font12, COL_WHITE, COL_BLACK);
 }
 
 // Black band with the city on the left and a short text (time or status) on the right,
 // then the yellow accent line. red = true draws the right text white on red (stale data).
 static void drawHeader(const char *right, bool red) {
-  Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 20, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawRectangle(0, 21, EPD_1IN54G_WIDTH, 24, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawString_EN(4, 2, CITY, &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  int x = EPD_1IN54G_WIDTH - 4 - Font12.Width * strlen(right);   // right-aligned
-  if (red) Paint_DrawString_EN(x, 4, right, &Font12, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
-  else     Paint_DrawString_EN(x, 4, right, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawRectangle(0, 0, EPD_WIDTH, 20, COL_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawRectangle(0, 21, EPD_WIDTH, 24, COL_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawString_EN(4, 2, CITY, &Font16, COL_WHITE, COL_BLACK);
+  int x = EPD_WIDTH - 4 - Font12.Width * strlen(right);   // right-aligned
+  if (red) Paint_DrawString_EN(x, 4, right, &Font12, COL_RED, COL_WHITE);
+  else     Paint_DrawString_EN(x, 4, right, &Font12, COL_WHITE, COL_BLACK);
 }
 
 // Indoor tile at x 126: temperature and humidity side by side (126..198).
@@ -340,12 +343,12 @@ static void drawHeader(const char *right, bool red) {
 // move DIVIDER_Y down then.
 static void drawLocal(const LocalReading &loc, bool ok) {
   char buf[8];
-  drawTitle(126, "INDOOR");
+  drawTitle(INDOOR_X, "INDOOR");
 
   // lroundf here and in setup()'s "indoor changed?" check, so both round the same way
   if (ok) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.temp));
   else    snprintf(buf, sizeof(buf), "--");
-  int x = drawReading(126, TILE_Y + 13, buf, "C");
+  int x = drawReading(INDOOR_X, TILE_Y + 13, buf, "C");
 
   if (ok) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.hum));
   else    snprintf(buf, sizeof(buf), "--");
@@ -353,14 +356,14 @@ static void drawLocal(const LocalReading &loc, bool ok) {
 }
 
 static void drawDivider() {
-  Paint_DrawLine(0, DIVIDER_Y, EPD_1IN54G_WIDTH - 1, DIVIDER_Y, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+  Paint_DrawLine(0, DIVIDER_Y, EPD_WIDTH - 1, DIVIDER_Y, COL_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
 }
 
 static void startImage() {
-  Paint_NewImage(img, EPD_1IN54G_WIDTH, EPD_1IN54G_HEIGHT, 0, EPD_1IN54G_WHITE);
-  Paint_SetScale(4);
+  Paint_NewImage(img, EPD_WIDTH, EPD_HEIGHT, 0, COL_WHITE);
+  Paint_SetScale(PANEL_SCALE);
   Paint_SelectImage(img);
-  Paint_Clear(EPD_1IN54G_WHITE);
+  Paint_Clear(COL_WHITE);
 }
 
 // ---------- bottom area ----------
@@ -369,8 +372,8 @@ static void startImage() {
 // To add a view: add it to the BottomView enum (near struct Weather), write a
 // drawBottom...() function for it, add a case in drawBottom(), and list it in BOTTOM_ROTATION.
 #define BOTTOM_Y (DIVIDER_Y + 1)                  // 106
-#define BOTTOM_W EPD_1IN54G_WIDTH                 // 200
-#define BOTTOM_H (EPD_1IN54G_HEIGHT - BOTTOM_Y)   // 94
+#define BOTTOM_W EPD_WIDTH                 // 200
+#define BOTTOM_H (EPD_HEIGHT - BOTTOM_Y)   // 94
 
 static const BottomView BOTTOM_ROTATION[] = { VIEW_FORECAST, VIEW_HOURLY, VIEW_IMAGE };
 static const uint8_t BOTTOM_VIEWS = sizeof(BOTTOM_ROTATION) / sizeof(BOTTOM_ROTATION[0]);
@@ -380,7 +383,7 @@ static const char *DAY_NAMES[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SA
 
 // Font12 text centred horizontally on cx.
 static void drawCentered(int cx, int y, const char *s) {
-  Paint_DrawString_EN(cx - Font12.Width * strlen(s) / 2, y, s, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(cx - Font12.Width * strlen(s) / 2, y, s, &Font12, COL_WHITE, COL_BLACK);
 }
 
 // View 1: the next 3 days in three 66 px columns: day name, icon, max/min, chance of rain.
@@ -391,12 +394,13 @@ static void drawBottomForecast(const Weather *w) {
     return;
   }
   char buf[16];
+  const int dayW = (BOTTOM_W + 1) / 3;   // 67: a 66 px column plus the 1 px line after it
   for (int i = 0; i < 3; i++) {
     const DayForecast &d = w->days[i];
-    int x0 = i * 67;          // columns at x 0, 67, 134
-    int cx = x0 + 33;         // column centre
+    int x0 = i * dayW;        // columns at x 0, 67, 134
+    int cx = x0 + dayW / 2;   // column centre
     if (i > 0) {              // thin line between columns, at x 66 and 133
-      Paint_DrawLine(x0 - 1, BOTTOM_Y + 2, x0 - 1, EPD_1IN54G_HEIGHT - 2, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+      Paint_DrawLine(x0 - 1, BOTTOM_Y + 2, x0 - 1, EPD_HEIGHT - 2, COL_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
     }
 
     drawCentered(cx, BOTTOM_Y + 2, DAY_NAMES[d.wday % 7]);    // y 108..119
@@ -405,10 +409,10 @@ static void drawBottomForecast(const Weather *w) {
     // "24/15" + "C" in Font16 is 62 px; longer text such as "-12/-15" drops to Font12 to stay in the column
     snprintf(buf, sizeof(buf), "%d/%d", (int)lroundf(d.tmax), (int)lroundf(d.tmin));
     sFONT *f = strlen(buf) <= 5 ? &Font16 : &Font12;
-    drawReading(cx - readingWidth(buf, "C", f) / 2, BOTTOM_Y + 59, buf, "C", f);   // y 165..181
+    drawReading(cx - readingWidth(buf, "C", f) / 2, EPD_HEIGHT - 35, buf, "C", f);   // y 165..181
 
     snprintf(buf, sizeof(buf), "%d", d.rain);
-    drawReading(cx - readingWidth(buf, "%", &Font12) / 2, BOTTOM_Y + 80, buf, "%", &Font12);   // y 186..198
+    drawReading(cx - readingWidth(buf, "%", &Font12) / 2, EPD_HEIGHT - 14, buf, "%", &Font12);   // y 186..198
   }
 }
 
@@ -444,16 +448,16 @@ static void drawBottomHourly(const Weather *w) {
   // Each range is drawn in its line's colour, so the ranges double as the legend.
   char buf[16];
   snprintf(buf, sizeof(buf), "%d..%dC", tLo, tHi);
-  Paint_DrawString_EN(4, BOTTOM_Y + 2, buf, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_RED);
+  Paint_DrawString_EN(4, BOTTOM_Y + 2, buf, &Font12, COL_WHITE, COL_RED);
   snprintf(buf, sizeof(buf), "%d..%d%%", hLo, hHi);
   Paint_DrawString_EN(BOTTOM_W - 4 - Font12.Width * strlen(buf), BOTTOM_Y + 2, buf, &Font12,
-                      EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+                      COL_WHITE, COL_BLACK);
 
   // Minimum spans, so a nearly flat day stays a nearly flat line instead of a zig-zag.
   int tSpan = tHi - tLo < 4 ? 4 : tHi - tLo;
   int hSpan = hHi - hLo < 10 ? 10 : hHi - hLo;
-  const int X0 = 9, X1 = 192;                         // first and last point
-  const int Y0 = BOTTOM_Y + 20, Y1 = BOTTOM_Y + 74;   // top (126) and bottom (180) of the plot
+  const int X0 = 9, X1 = BOTTOM_W - 8;                // first and last point
+  const int Y0 = BOTTOM_Y + 20, Y1 = EPD_HEIGHT - 20; // top (126) and bottom (180) of the plot
 
   int px = 0, pt = 0, ph = 0;   // previous point
   for (int i = 0; i < HOURS_SHOWN; i++) {
@@ -462,16 +466,16 @@ static void drawBottomHourly(const Weather *w) {
     int hy = Y1 - (Y1 - Y0) * (h[i] - hLo) / hSpan;
     if (i > 0) {
       // humidity first, so the red temperature line stays on top where they cross
-      Paint_DrawLine(px, ph, x, hy, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-      Paint_DrawLine(px, pt, x, ty, EPD_1IN54G_RED, DOT_PIXEL_2X2, LINE_STYLE_SOLID);
+      Paint_DrawLine(px, ph, x, hy, COL_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+      Paint_DrawLine(px, pt, x, ty, COL_RED, DOT_PIXEL_2X2, LINE_STYLE_SOLID);
     }
     px = x; pt = ty; ph = hy;
     if (i % 3 == 0) {   // e.g. "21", "00", "03", "06"
       snprintf(buf, sizeof(buf), "%02d", (w->hour0 + i) % 24);
-      drawCentered(x, BOTTOM_Y + 80, buf);
+      drawCentered(x, EPD_HEIGHT - 14, buf);
     }
   }
-  Paint_DrawLine(X0, Y1 + 3, X1, Y1 + 3, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);   // time axis, y 182
+  Paint_DrawLine(X0, Y1 + 3, X1, Y1 + 3, COL_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);   // time axis, y 182
 }
 
 // View 3: a picture from bottom_image.cpp (made with tools/img2epd.ps1), centred in the area.
@@ -528,14 +532,14 @@ static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, b
 
   drawWeatherIcon(w.code, ICON_X, ICON_Y);
   // "Partly cloudy" (13 chars x 11 px) is the longest and ends at x 197
-  Paint_DrawString_EN(TEXT_X, 27, wmoText(w.code), &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
+  Paint_DrawString_EN(TEXT_X, 27, wmoText(w.code), &Font16, COL_BLACK, COL_WHITE);
 
   // Temperature and humidity: no titles, the units say what they are.
   // "-12.5C" ends at x 131, before the humidity at x 140.
   snprintf(buf, sizeof(buf), "%.1f", w.temp);
   drawReading(TEXT_X, 46, buf, "C");
   snprintf(buf, sizeof(buf), "%d", w.hum);
-  drawReading(140, 46, buf, "%");
+  drawReading(HUM_X, 46, buf, "%");
 
   // Feels is rounded like the indoor values, so "-12C" (49 px) stays left of the WIND tile.
   drawTitle(2, "FEELS");
@@ -556,7 +560,7 @@ static void drawNoData(const LocalReading &loc, bool locOk) {
   startImage();
   drawHeader("Update failed", true);
   iconUnknown(ICON_X, ICON_Y);
-  Paint_DrawString_EN(TEXT_X, 27, "No data", &Font16, EPD_1IN54G_BLACK, EPD_1IN54G_WHITE);
+  Paint_DrawString_EN(TEXT_X, 27, "No data", &Font16, COL_BLACK, COL_WHITE);
   drawLocal(loc, locOk);
   drawDivider();
   drawBottom(nullptr);
@@ -566,22 +570,22 @@ static void drawNoData(const LocalReading &loc, bool locOk) {
 static void drawSetupScreen() {
   char buf[24];
   startImage();
-  Paint_DrawRectangle(0, 0, EPD_1IN54G_WIDTH, 30, EPD_1IN54G_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawRectangle(0, 31, EPD_1IN54G_WIDTH, 35, EPD_1IN54G_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawString_EN(8, 3, "WIFI SETUP", &Font24, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(8, 48, "Join WiFi:", &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(8, 68, SETUP_AP_NAME, &Font16, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
-  Paint_DrawString_EN(8, 88, "Pass " SETUP_AP_PASS, &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(8, 114, "Then open:", &Font16, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(8, 134, SETUP_AP_IP, &Font16, EPD_1IN54G_RED, EPD_1IN54G_WHITE);
+  Paint_DrawRectangle(0, 0, EPD_WIDTH, 30, COL_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawRectangle(0, 31, EPD_WIDTH, 35, COL_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawString_EN(8, 3, "WIFI SETUP", &Font24, COL_WHITE, COL_BLACK);
+  Paint_DrawString_EN(8, 48, "Join WiFi:", &Font16, COL_WHITE, COL_BLACK);
+  Paint_DrawString_EN(8, 68, SETUP_AP_NAME, &Font16, COL_RED, COL_WHITE);
+  Paint_DrawString_EN(8, 88, "Pass " SETUP_AP_PASS, &Font16, COL_WHITE, COL_BLACK);
+  Paint_DrawString_EN(8, 114, "Then open:", &Font16, COL_WHITE, COL_BLACK);
+  Paint_DrawString_EN(8, 134, SETUP_AP_IP, &Font16, COL_RED, COL_WHITE);
   snprintf(buf, sizeof(buf), "Open for %u min", (unsigned)(SETUP_PORTAL_SECONDS / 60));
-  Paint_DrawString_EN(8, 162, buf, &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
-  Paint_DrawString_EN(8, 176, "then weather starts", &Font12, EPD_1IN54G_WHITE, EPD_1IN54G_BLACK);
+  Paint_DrawString_EN(8, 162, buf, &Font12, COL_WHITE, COL_BLACK);
+  Paint_DrawString_EN(8, 176, "then weather starts", &Font12, COL_WHITE, COL_BLACK);
 }
 
 // Same shutdown steps every time the panel has been woken, so no path leaves it powered.
 static void panelOff() {
-  EPD_1IN54G_Sleep();          // important: never leave the panel powered
+  panelSleep();                // important: never leave the panel powered
   DEV_Delay_ms(2000);          // Waveshare: at least 2 s after sleep
   DEV_Module_Exit();
 }
@@ -609,8 +613,8 @@ void setup() {
         SETUP_AP_NAME, (unsigned)SETUP_PORTAL_SECONDS);
     if (DEV_Module_Init() == 0) {
       drawSetupScreen();
-      EPD_1IN54G_Init();
-      EPD_1IN54G_Display(img);
+      panelInit();
+      panelDisplay(img);
       panelOff();
     } else {
       LOG("DEV_Module_Init failed, portal runs without setup screen\n");
@@ -682,7 +686,7 @@ void setup() {
     // Wake the panel by reset (image stays) so it can be put to sleep the same way.
     // Not needed while the panel is already asleep from the last run:
     // DEV_Module_Init();
-    // EPD_1IN54G_Init();
+    // panelInit();
     // panelOff();
     goToSleep(retrySeconds());
   }
@@ -706,8 +710,8 @@ void setup() {
   uint32_t tr = millis();   // only used for the refresh timing log
 #endif
   LOG("Refreshing panel (takes ~15-20 s)...\n");
-  EPD_1IN54G_Init();
-  EPD_1IN54G_Display(img);
+  panelInit();
+  panelDisplay(img);
   LOG("Refresh done in %u ms\n", (unsigned)(millis() - tr));
   panelOff();
   LOG("Panel asleep\n");

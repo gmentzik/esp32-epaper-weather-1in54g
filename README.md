@@ -216,6 +216,7 @@ All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
 | `ESP32_WEATHER_EPAPER.ino` | Main program: WiFi, fetch, layout, sleep and retry logic |
 | `local_sensor.cpp/.h` | Indoor sensor (DHT22) reading |
 | `weather_icons.cpp/.h` | Weather icons drawn for each condition |
+| `panel.h` | The one place that names the display: size, colours and panel calls |
 | `wifi_setup.cpp/.h` | WiFi setup portal (access point, web page, saving credentials) |
 | `bottom_image.cpp/.h` | Picture for the bottom area (generated, do not edit by hand) |
 | `tools/img2epd.ps1` (repo root) | Converts a picture into `bottom_image.cpp/.h` |
@@ -225,10 +226,13 @@ All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
 
 ## Other displays
 
-The drawing code is written for the 1.54" (G) panel: 200×200 pixels, 4 colours and
-Waveshare's `EPD_1IN54G_*` driver calls. Other Waveshare panels can be supported by swapping
-the driver files and adjusting colours and layout. See `TODO.md` for the planned clean-up
-that will make this easier.
+The sketch is set up for the 1.54" (G) panel: 200×200 pixels and 4 colours. To support
+another Waveshare panel, swap the driver files and update `panel.h`, which holds the panel's
+size, colours (`COL_WHITE`, `COL_BLACK`, `COL_RED`, `COL_YELLOW`) and init, display and sleep
+calls. A panel with fewer colours maps the missing ones to a colour it has. Items at the right
+and bottom edges follow `EPD_WIDTH` and `EPD_HEIGHT`, but fonts have a fixed size, so a much
+smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, as it stores
+the panel's raw colour codes.
 
 ## Version history
 
