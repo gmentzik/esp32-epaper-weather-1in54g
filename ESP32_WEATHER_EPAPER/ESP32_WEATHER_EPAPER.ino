@@ -68,7 +68,7 @@ const float LON = 23.73;
 
 // Full refresh takes ~15-20 s and Waveshare recommends >= 3 min between
 // refreshes. Keep this at 3 or more.
-const uint32_t REFRESH_MINUTES = 10;
+const uint32_t REFRESH_MINUTES = 3;
 const uint32_t RETRY_MINUTES = 1;    // used when WiFi/fetch fails
 // Each failure in a row adds one more RETRY_MINUTES to the wait (1, 2, 3 ... min),
 // up to this many times, so a long outage doesn't drain the battery with retries.
