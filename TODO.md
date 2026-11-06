@@ -5,18 +5,6 @@ Since not practical use at the moment make it so it can be disabled from setup s
 Later it will be used to fetch a prepared bitmap from local network with custom information similar to other e-ink solutions out there.
 When enabled user may also put the url path to fetch the image at setup.
 
-## Make the code easier to port to other e-paper displays
-The drawing code is currently tied to the Waveshare 1.54" (G) 4-color panel
-(about 47 uses of `EPD_1IN54G_*` in the .ino and weather_icons.cpp).
-
-- [ ] **Colour names:** define `COL_BG`, `COL_TEXT` and `COL_ACCENT` once, instead of
-      using `EPD_1IN54G_*` everywhere. A black/white panel then only needs these remapped.
-- [ ] **Panel calls:** put the init, display and sleep calls (`EPD_1IN54G_Init`,
-      `EPD_1IN54G_Display`, `EPD_1IN54G_Sleep`) in one small wrapper, so a new panel
-      only changes that wrapper.
-- [ ] **Layout:** express positions in terms of `EPD_WIDTH` and `EPD_HEIGHT` where
-      possible, instead of hard-coded 200x200 coordinates.
-
 ## Split the .ino into modules
 The .ino (~720 lines) mixes fetching, drawing and the wake/sleep flow. Move the first
 two into their own files, like `local_sensor` and `wifi_setup`. Only moves code, no
