@@ -5,7 +5,7 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature and humidity from a local sensor. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.3** (see [Version history](#version-history)).
+Current version: **0.4** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -235,6 +235,11 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.4
+- Centralized panel dimensions, colour names and init/display/sleep calls in `panel.h`,
+  making it easier to adapt the sketch to other e-paper displays.
+- Updated drawing code to use the shared colour names and panel dimensions where possible.
 
 ### 0.3
 - Compact screen layout: the weather now fits in the top half, leaving about half of the
