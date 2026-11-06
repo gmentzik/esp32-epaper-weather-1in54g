@@ -5,6 +5,9 @@ Since not practical use at the moment make it so it can be disabled from setup s
 Later it will be used to fetch a prepared bitmap from local network with custom information similar to other e-ink solutions out there.
 When enabled user may also put the url path to fetch the image at setup.
 
+- [x] Checkbox in the setup portal, stored as bit 0 of the `flags` byte (default off).
+- [ ] URL field for fetching the image from the local network.
+
 ## Split the .ino into modules
 The .ino (~720 lines) mixes fetching, drawing and the wake/sleep flow. Move the first
 two into their own files, like `local_sensor` and `wifi_setup`. Only moves code, no
@@ -45,6 +48,7 @@ optional `&countryCode=GR`).
       `LAT`/`LON` defaults) and retry on a later wake.
 
 As 1st option: User can search the Lat Lon and in config form set the name , Lat and Lon.
+(Done: name / LAT / LON fields in the portal, "Fill in ATHENS" preset button, presets in `settings.cpp`.)
 As 2nd option: Auto search will be an additional option. That way user can cover cases of API failure to connect / or fail to find.
 
 Things to handle:

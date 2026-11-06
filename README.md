@@ -25,8 +25,10 @@ divider, 200×94 px) switches view on every refresh:
    max/min temperature and chance of rain.
 2. **Hourly graph:** temperature (red) and humidity (black) for the next 12 hours, with
    each one's min..max at the top and the hour every 3 hours along the bottom.
-3. **Picture:** an image from `bottom_image.cpp` (a sample picture at first; see
-   [Custom picture](#custom-picture)).
+3. **Picture (optional, off by default):** an image from `bottom_image.cpp` (a sample
+   picture at first; see [Custom picture](#custom-picture)). Turn it on with
+   *Show the picture view* in the [setup portal](#setup-portal); while it is off, the
+   rotation skips it.
 
 ### Screen layout
 
@@ -48,7 +50,8 @@ divider, 200×94 px) switches view on every refresh:
 
 The bottom area is drawn by `drawBottom()` in the "bottom area" section of the `.ino`.
 To add another view, add it to the `BottomView` enum, write a `drawBottom...()` function,
-add a `case` in `drawBottom()` and list it in `BOTTOM_ROTATION`.
+add a `case` in `drawBottom()` and list it in `BOTTOM_ROTATION`. To make it optional,
+give it a flag bit in `settings.h`, a checkbox in the portal and a line in `viewEnabled()`.
 
 ### Custom picture
 
@@ -67,7 +70,7 @@ detail. `-Demo` recreates the sample picture.
 ## How it works
 
 At power-up or reset (not when waking from deep sleep) it first opens the
-[WiFi setup portal](#wifi-setup) for 2 minutes.
+[setup portal](#setup-portal) for 2 minutes.
 
 Each time the ESP32 wakes up it:
 
@@ -79,7 +82,7 @@ When the update fails (no WiFi or the API is unreachable):
 
 - **After at least one good update:** the last known weather stays on screen and the
   update time in the header turns white on red.
-- **If no data was ever fetched:** the header shows a red "Update failed", and "No data"
+- **If no data was ever fetched:** the header shows a red "No update", and "No data"
   appears next to a "?" icon. The indoor reading is still shown.
 - **Retries back off:** each failure in a row waits one step longer (1, 2, 3 ... minutes,
   up to 15 steps), so a long outage doesn't drain the battery.
@@ -87,7 +90,8 @@ When the update fails (no WiFi or the API is unreachable):
   if the indoor reading on screen would change. Each full refresh takes 15-20 s.
 
 Values that must survive deep sleep (last weather, failure count, what is on screen) are kept in RTC memory.
-A reset or power loss clears them.
+A reset or power loss clears them. The settings from the setup portal (WiFi, location,
+options) are kept in flash and are never cleared.
 
 ## Hardware
 
@@ -142,37 +146,28 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
 3. **Libraries** (Library Manager):
    - `ArduinoJson` (v7)
    - `DHT sensor library` by Adafruit (also install `Adafruit Unified Sensor` when asked)
-4. **WiFi credentials:** set them from your phone with the [WiFi setup portal](#wifi-setup),
-   no code change needed. Optional: to build in a default, copy `secrets.example.h` to
-   `secrets.h` in the sketch folder and fill it in. `secrets.h` is in `.gitignore`, so it is never committed.
+4. **WiFi credentials and location:** set them from your phone with the
+   [setup portal](#setup-portal), no code change needed. Optional: to build in a default
+   WiFi, copy `secrets.example.h` to `secrets.h` in the sketch folder and fill it in.
+   `secrets.h` is in `.gitignore`, so it is never committed.
 5. **Settings** at the top of `ESP32_WEATHER_EPAPER.ino`:
 
    | Setting | Default | Meaning |
    |---|---|---|
-   | `CITY` | `"ATHENS"` | Header text (ASCII only) |
-   | `LAT`, `LON` | `37.98`, `23.73` | Location for the forecast |
    | `REFRESH_MINUTES` | `15` | Time between updates. Keep it at 3 or more (Waveshare recommendation) |
    | `RETRY_MINUTES` | `1` | Base retry wait after a failure |
    | `MAX_FAIL_COUNT` | `15` | Maximum backoff steps |
    | `SETUP_PORTAL_SECONDS` | `120` | How long the WiFi setup portal stays open after power-up |
    | `DEBUG_LOG` | `1` | `1` = progress on the Serial Monitor (115200 baud), `0` = silent for battery use |
 
-   **Finding `LAT` / `LON` for another place:**
-   - Open-Meteo's geocoding (free, no key): open this in a browser, with your city as `name`:
-     `https://geocoding-api.open-meteo.com/v1/search?name=Thessaloniki&count=5&language=en&format=json`
-     and copy `latitude` and `longitude` from the right entry (check `country` and `admin1`
-     if several places share the name).
-   - Or Google Maps: right-click the spot; the first line of the menu is `lat, lon`
-     (click it to copy).
-
-   Two decimals are enough (about 1 km); the sketch sends only two anyway. South and west are
-   negative, e.g. New York is `40.71`, `-74.01`. Also change `CITY` to match.
+   The default location (used until the portal saves one) and the quick-fill buttons
+   on the setup page are `LOCATION_PRESETS` in `settings.cpp`. The first entry is the default.
 
 6. **Board:** Tools → Board → *ESP32 Dev Module*, select the COM port, then Upload.
 
 Keep the sketch folder named `ESP32_WEATHER_EPAPER`. The Arduino IDE needs it to match the `.ino` file name.
 
-## WiFi setup
+## Setup portal
 
 After every power-up or press of EN (reset), the display shows a **WIFI SETUP** screen and
 the ESP32 opens its own WiFi network for 2 minutes:
@@ -180,20 +175,44 @@ the ESP32 opens its own WiFi network for 2 minutes:
 1. On your phone, join the WiFi network **`Weather-Setup`**, password **`44444444`**
    (also shown on the screen; change `SETUP_AP_PASS` in `wifi_setup.h`, at least 8 characters).
 2. The setup page usually opens by itself. If not, open **http://192.168.4.1** in the browser.
-3. Pick or type your WiFi name, enter the password and press **Save**.
-   Press **Skip** to keep the current network and start right away.
+3. Fill in the page (it shows the values stored now) and press **Save**.
+   Press **Skip** to keep everything as it is and start right away.
+
+The page has three parts:
+
+| Part | Fields |
+|---|---|
+| **WiFi** | Network name and password. Leave the name empty to keep the current network. |
+| **Location** | Name shown in the header (up to 10 plain ASCII characters, spaces at the ends are removed), latitude (-90 to 90) and longitude (-180 to 180). A **Fill in ATHENS** button fills in all three. |
+| **Bottom area** | *Show the picture view*: ticked = the picture is part of the rotation, not ticked (default) = it is skipped. |
 
 The station then connects and shows the weather. If nobody connects within 2 minutes, it
-continues with the saved network. The credentials are stored in the ESP32's flash (NVS),
-so they survive deep sleep, resets and power loss. Timer wake-ups from deep sleep never open
-the portal, so it costs no battery in normal running.
+continues with the saved settings. Everything is stored in the ESP32's flash (NVS), so it
+survives deep sleep, resets and power loss. On/off options share one byte (`flags`, one
+bit per option; bit 0 = picture view). Timer wake-ups from deep sleep never open the
+portal, so it costs no battery in normal running.
 
 The ESP32 only supports 2.4 GHz WiFi. If the password was wrong, press EN and set it again.
+
+### Finding the latitude and longitude
+
+- Open-Meteo's geocoding (free, no key): open this in a browser, with your place as `name`:
+  `https://geocoding-api.open-meteo.com/v1/search?name=Athens&count=5&language=en&format=json&countryCode=GR`
+  and copy `latitude` and `longitude` from the right entry (check `country` and `admin1`
+  if several places share the name). `&countryCode=GR` is optional: it keeps only places in
+  that country (2-letter ISO code, e.g. `IT`, `DE`, `US`). Leave it out to search all countries.
+- Or Google Maps: right-click the spot; the first line of the menu is `lat, lon`
+  (click it to copy).
+
+The setup page shows the same link, but the `Weather-Setup` network has no internet, so
+open the link on another device (or on the phone with mobile data) and type the numbers in.
+Two decimals are enough (about 1 km); the sketch sends only two anyway. South and west are
+negative, e.g. New York is `40.71`, `-74.01`.
 
 ## First start
 
 1. Open the Serial Monitor at 115200 baud.
-2. Press EN (reset) on the ESP32 and set up WiFi as described above.
+2. Press EN (reset) on the ESP32 and set up WiFi and the location as described above.
 3. You should see the indoor reading, `WiFi connected`, `Fetch OK`, and then the panel
    refresh, which takes about 15-20 s.
 4. The ESP32 then deep-sleeps for `REFRESH_MINUTES` and repeats.
@@ -217,7 +236,8 @@ All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
 | `local_sensor.cpp/.h` | Indoor sensor (DHT22) reading |
 | `weather_icons.cpp/.h` | Weather icons drawn for each condition |
 | `panel.h` | The one place that names the display: size, colours and panel calls |
-| `wifi_setup.cpp/.h` | WiFi setup portal (access point, web page, saving credentials) |
+| `wifi_setup.cpp/.h` | Setup portal (access point, web page, saving WiFi credentials and settings) |
+| `settings.cpp/.h` | Stored settings: location, option flags, location presets |
 | `bottom_image.cpp/.h` | Picture for the bottom area (generated, do not edit by hand) |
 | `tools/img2epd.ps1` (repo root) | Converts a picture into `bottom_image.cpp/.h` |
 | `secrets.example.h` | Template for the optional `secrets.h` (default WiFi credentials) |
