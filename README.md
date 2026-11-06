@@ -5,7 +5,7 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature and humidity from a local sensor. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.4** (see [Version history](#version-history)).
+Current version: **0.5** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -255,6 +255,17 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.5
+- Location (name, latitude, longitude) is set in the setup portal and stored in flash,
+  instead of `CITY` / `LAT` / `LON` in the code. The name is limited to 10 characters and
+  trimmed. A "Fill in ATHENS" button fills in the default (presets in `settings.cpp`).
+- The setup page links to Open-Meteo's geocoding search for finding the coordinates.
+- The picture view in the bottom area is optional: a checkbox in the setup portal, off by
+  default. On/off options are stored as bits of one `flags` byte (bit 0 = picture view).
+- One Save button for all settings; an empty WiFi name keeps the current network.
+- The header shows "No update" instead of "Update failed" when no weather was ever fetched,
+  so it doesn't cover a 10-character name.
 
 ### 0.4
 - Centralized panel dimensions, colour names and init/display/sleep calls in `panel.h`,

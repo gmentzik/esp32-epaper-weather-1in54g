@@ -1,5 +1,5 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.4 (see "Version history" in README.md)
+// Version 0.5 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
