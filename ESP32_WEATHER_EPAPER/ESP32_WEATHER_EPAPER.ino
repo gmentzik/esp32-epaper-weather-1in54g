@@ -1,11 +1,11 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.4 (see "Version history" in README.md)
+// Version 0.5 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
 // deep-sleeps the ESP32 until the next refresh.
 // The bottom half of the screen changes on every refresh between views:
-// a 3-day forecast, a 12-hour temperature/humidity graph and a picture (see "bottom area").
+// a 3-day forecast, a 12-hour temperature/humidity graph and an optional picture (see "bottom area").
 //
 // SETUP
 //  1. Library Manager: install "ArduinoJson" (v7) and "DHT sensor library" (Adafruit,
@@ -13,8 +13,9 @@
 //  2. Open this .ino from its folder "ESP32_WEATHER_EPAPER" (the Arduino IDE needs the
 //     folder name to match). The Waveshare driver files are already in this folder.
 //  3. WiFi: after power-up / reset, join the "Weather-Setup" network with a phone and
-//     enter your WiFi name and password (open for SETUP_PORTAL_SECONDS).
-//     Optional default: copy secrets.example.h to secrets.h and fill it in.
+//     enter your WiFi name and password (open for SETUP_PORTAL_SECONDS). The same page
+//     sets the location (name, LAT, LON) and whether the picture view is shown.
+//     Optional default WiFi: copy secrets.example.h to secrets.h and fill it in.
 //  4. Board: ESP32 Dev Module.
 
 /*
@@ -58,13 +59,13 @@
 #include "weather_icons.h"
 #include "local_sensor.h"
 #include "wifi_setup.h"
+#include "settings.h"
 #include "bottom_image.h"
 
 // ---------- settings ----------
 
-const char *CITY = "ATHENS";      // header text (ASCII only)
-const float LAT = 37.98;
-const float LON = 23.73;
+// Location (name, LAT, LON) and the picture view on/off are set in the setup portal
+// and stored in flash. Defaults and quick-fill locations: LOCATION_PRESETS in settings.cpp.
 
 // Full refresh takes ~15-20 s and Waveshare recommends >= 3 min between
 // refreshes. Keep this at 3 or more.
@@ -127,6 +128,9 @@ RTC_DATA_ATTR static bool shownLocOk = false;   // false = screen shows "--"
 RTC_DATA_ATTR static int shownTemp = 0;
 RTC_DATA_ATTR static int shownHum = 0;
 
+// Settings from the setup portal (flash), read again on every wake in setup().
+static StationSettings cfg;
+
 // Retry wait grows with failCount. At least 1x, so a failure with failCount = 0
 // (e.g. the display init fails after a good fetch) never sleeps for 0 s.
 static uint32_t retrySeconds() {
@@ -179,7 +183,7 @@ static void drawWeatherIcon(int c, int cx, int cy) {
   else iconUnknown(cx, cy);
 }
 
-static bool fetchWeather(Weather &w) {
+static bool fetchWeather(Weather &w, float lat, float lon) {
   WiFiClientSecure client;
   client.setInsecure();  // skips certificate check; fine for public weather data
 
@@ -193,7 +197,7 @@ static bool fetchWeather(Weather &w) {
            "&hourly=temperature_2m,relative_humidity_2m"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
            "&forecast_days=4&timezone=auto",
-           LAT, LON);
+           lat, lon);
 
   HTTPClient http;
   if (!http.begin(client, url)) {
@@ -328,10 +332,13 @@ static void drawTitle(int x, const char *title) {
 
 // Black band with the city on the left and a short text (time or status) on the right,
 // then the yellow accent line. red = true draws the right text white on red (stale data).
+// The city (max 10 chars, ends at x 114) leaves room for "07/10 21:45" from x 119.
 static void drawHeader(const char *right, bool red) {
   Paint_DrawRectangle(0, 0, EPD_WIDTH, 20, COL_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
   Paint_DrawRectangle(0, 21, EPD_WIDTH, 24, COL_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  Paint_DrawString_EN(4, 2, CITY, &Font16, COL_WHITE, COL_BLACK);
+  char city[CITY_MAX_LEN + 1];
+  cleanCityName(cfg.city, city);   // same trim / length check as the setup form
+  Paint_DrawString_EN(4, 2, city, &Font16, COL_WHITE, COL_BLACK);
   int x = EPD_WIDTH - 4 - Font12.Width * strlen(right);   // right-aligned
   if (red) Paint_DrawString_EN(x, 4, right, &Font12, COL_RED, COL_WHITE);
   else     Paint_DrawString_EN(x, 4, right, &Font12, COL_WHITE, COL_BLACK);
@@ -368,7 +375,8 @@ static void startImage() {
 
 // ---------- bottom area ----------
 // Everything below the divider: 200 x 94 px. It shows one "view" per panel refresh and
-// moves on to the next view in BOTTOM_ROTATION after each refresh.
+// moves on to the next view in BOTTOM_ROTATION after each refresh. Views turned off in
+// the setup portal are skipped (see viewEnabled()).
 // To add a view: add it to the BottomView enum (near struct Weather), write a
 // drawBottom...() function for it, add a case in drawBottom(), and list it in BOTTOM_ROTATION.
 #define BOTTOM_Y (DIVIDER_Y + 1)                  // 106
@@ -504,9 +512,27 @@ static const char *viewName(BottomView v) {
   return "?";
 }
 
+// false = the view is turned off in the setup portal and left out of the rotation.
+static bool viewEnabled(BottomView v) {
+  if (v == VIEW_IMAGE) return (cfg.flags & FLAG_SHOW_IMAGE) != 0;
+  return true;
+}
+
+// The view that is due now. If it is turned off, moves bottomIndex on to the next one
+// that is on, so nextBottomView() continues from the view really shown.
+static BottomView dueBottomView() {
+  for (uint8_t i = 0; i < BOTTOM_VIEWS; i++) {
+    BottomView v = BOTTOM_ROTATION[bottomIndex % BOTTOM_VIEWS];
+    if (viewEnabled(v)) return v;
+    LOG("Bottom view %s is off, skipping\n", viewName(v));
+    bottomIndex = (bottomIndex + 1) % BOTTOM_VIEWS;
+  }
+  return VIEW_FORECAST;   // every view off (can't happen now: forecast is always on)
+}
+
 // Draws the bottom area with the view that is due now. w may be nullptr (no data yet).
 static void drawBottom(const Weather *w) {
-  BottomView v = BOTTOM_ROTATION[bottomIndex % BOTTOM_VIEWS];
+  BottomView v = dueBottomView();
   LOG("Bottom view: %s\n", viewName(v));
   switch (v) {
     case VIEW_FORECAST: drawBottomForecast(w); break;
@@ -558,7 +584,7 @@ static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, b
 // Used when the very first fetch fails and there is no old data to show.
 static void drawNoData(const LocalReading &loc, bool locOk) {
   startImage();
-  drawHeader("Update failed", true);
+  drawHeader("No update", true);   // short enough not to cover a 10-char city name
   iconUnknown(ICON_X, ICON_Y);
   Paint_DrawString_EN(TEXT_X, 27, "No data", &Font16, COL_BLACK, COL_WHITE);
   drawLocal(loc, locOk);
@@ -621,8 +647,13 @@ void setup() {
       DEV_Module_Exit();
     }
     bool saved = runWifiSetupPortal(SETUP_PORTAL_SECONDS);
-    LOG(saved ? "New WiFi credentials saved\n" : "Setup portal closed, keeping current WiFi\n");
+    LOG(saved ? "New settings saved\n" : "Setup portal closed, keeping current settings\n");
   }
+
+  // Settings from flash, read after the portal so new values apply right away.
+  loadSettings(cfg);
+  LOG("Location: '%s' (%.2f, %.2f), picture view %s\n", cfg.city, cfg.lat, cfg.lon,
+      (cfg.flags & FLAG_SHOW_IMAGE) ? "on" : "off");
 
   // 0b. indoor sensor (independent of WiFi, so it is available even if the fetch fails)
   LocalReading loc = {0, 0};
@@ -644,7 +675,7 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     LOG("WiFi connected in %u ms, IP %s, RSSI %d dBm\n",
         (unsigned)(millis() - t0), WiFi.localIP().toString().c_str(), WiFi.RSSI());
-    ok = fetchWeather(w);
+    ok = fetchWeather(w, cfg.lat, cfg.lon);
     LOG("Fetch %s\n", ok ? "OK" : "FAILED");
     if (ok) {
       LOG("Weather: %.1f C (feels %.1f), hum %d%%, wind %.0f km/h (Bft %d), code %d (%s), %s %s\n",
