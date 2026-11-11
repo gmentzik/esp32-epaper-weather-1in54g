@@ -2,10 +2,10 @@
 
 A low-power weather station built on an ESP32 and a Waveshare 1.54" (G) 4-colour e-paper display.
 It shows the current outdoor weather from an online forecast service together with indoor
-temperature and humidity from a local sensor. Between updates the ESP32 deep-sleeps and the
+temperature, humidity and air pressure from local sensors. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.5** (see [Version history](#version-history)).
+Current version: **0.6** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -15,13 +15,17 @@ Current version: **0.5** (see [Version history](#version-history)).
 - **FEELS:** "feels like" temperature, in whole degrees
 - **WIND:** wind force in Beaufort (0-12 Bft). Open-Meteo has no Beaufort option, so the
   ESP32 converts it from km/h.
-- **INDOOR:** temperature and humidity from the DHT22 (`--` if the sensor can't be read)
+- **INDOOR** (boxed, with the word written vertically on the right): temperature and
+  humidity from the DHT22, and below them the air pressure from the BMP280 in hPa
+  (`--` for a sensor that can't be read). The pressure is converted to **sea level**, like
+  weather reports, using the elevation Open-Meteo returns for the location. Until the first
+  good update the raw value at the sensor is shown.
 
-Numbers are black and their units (C, %, Bft) are red, so they are easy to tell apart.
+Numbers are black and their units (C, %, Bft, hPa) are red, so they are easy to tell apart.
 The current weather takes the top half of the screen. The **bottom area** (below the
 divider, 200×94 px) switches view on every refresh:
 
-1. **3-day forecast:** tomorrow and the next 2 days, each with the day name, icon,
+1. **3-day forecast:** today and the next 2 days, each with the day name, icon,
    max/min temperature and chance of rain.
 2. **Hourly graph:** temperature (red) and humidity (black) for the next 12 hours, with
    each one's min..max at the top and the hour every 3 hours along the bottom.
@@ -38,9 +42,10 @@ divider, 200×94 px) switches view on every refresh:
 |==============================|  yellow line
 | (icon)  Partly cloudy        |  condition text
 | (icon)  23.5C     65%        |  outdoor temperature, humidity
-|FEELS   WIND        INDOOR    |  tile titles
-|21C     4Bft        22C 55%   |  values, units in red
-|------------------------------|  divider (y 105)
+|                 +-----------+|
+|FEELS   WIND     |22C 55%   I||  tile titles; indoor T/H
+|21C     4Bft     |1013hPa   N||  values, units in red; pressure
+|-----------------+-----------+|  divider (y 105) = bottom of the box
 |  SAT   |   SUN    |   MON    |  bottom area, view 1: 3-day forecast
 | (icon) |  (icon)  |  (icon)  |
 | 24/15C |  22/14C  |  19/12C  |  max/min
@@ -74,7 +79,7 @@ At power-up or reset (not when waking from deep sleep) it first opens the
 
 Each time the ESP32 wakes up it:
 
-1. Reads the indoor sensor (DHT22).
+1. Reads the indoor sensors (DHT22, BMP280).
 2. Connects to WiFi and fetches current weather from [Open-Meteo](https://open-meteo.com/) (no API key needed).
 3. Redraws the display, puts the panel to sleep, then deep-sleeps until the next update.
 
@@ -100,6 +105,7 @@ options) are kept in flash and are never cleared.
 | ESP32 dev board | "ESP32 Dev Module" (ESP32-WROOM-32) |
 | Waveshare 1.54" e-Paper (G) | 200×200, black / white / yellow / red |
 | DHT22 (AM2302) module | temperature and humidity |
+| BMP280 module (I2C) | air pressure |
 | Jumper wires, USB cable | |
 
 ## Wiring
@@ -132,9 +138,22 @@ Set the **BS** jumper on the display board to **0** (4-line SPI). The pins are d
 Most DHT22 modules already have a pull-up resistor on the data line.
 A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
 
+### BMP280 sensor
+
+| BMP280 pin | ESP32 pin | Note |
+|---|---|---|
+| VCC / VIN | 3V3 | |
+| GND | GND | |
+| SDA | GPIO21 | Set by `BMP_SDA` in `local_sensor.cpp` |
+| SCL | GPIO22 | Set by `BMP_SCL` in `local_sensor.cpp` |
+
+The sketch tries I2C address 0x76 and 0x77 (set by the SDO pin on the module), and accepts
+a BME280 too, since some boards sold as "BMP280" carry one. The sensor runs in forced
+mode: it takes one reading when asked and then sleeps, so it draws almost nothing while
+the ESP32 deep-sleeps. Module boards already have the I2C pull-up resistors.
+
 ### Pins to keep free
 
-- **GPIO21 (SDA) / GPIO22 (SCL):** reserved for a future I2C sensor (e.g. pressure).
 - **GPIO12:** leave unconnected. It is a strapping pin and can block boot or flashing.
 
 ## Software setup
@@ -146,6 +165,7 @@ A bare 4-pin sensor needs about 10 kΩ between DATA and 3V3.
 3. **Libraries** (Library Manager):
    - `ArduinoJson` (v7)
    - `DHT sensor library` by Adafruit (also install `Adafruit Unified Sensor` when asked)
+   - `Adafruit BMP280 Library` (also install `Adafruit BusIO` when asked)
 4. **WiFi credentials and location:** set them from your phone with the
    [setup portal](#setup-portal), no code change needed. Optional: to build in a default
    WiFi, copy `secrets.example.h` to `secrets.h` in the sketch folder and fill it in.
@@ -223,6 +243,8 @@ negative, e.g. New York is `40.71`, `-74.01`.
 |---|---|
 | Upload fails with "Wrong boot mode" | Hold BOOT, tap EN, release BOOT, then upload again |
 | `Indoor sensor read failed`, `--` on screen | DHT22 data wire on GPIO32, 3V3 power, pull-up resistor |
+| `Pressure sensor not found`, `--hPa` on screen | BMP280 SDA on GPIO21, SCL on GPIO22, 3V3 power |
+| Pressure a few hPa off from weather reports | Open-Meteo's elevation is for the area, not your floor: about 1 hPa per 8 m of height difference |
 | `WiFi failed` | Press EN and re-enter WiFi name and password in the setup portal; the ESP32 only supports 2.4 GHz WiFi |
 | Display stays blank | Wiring, BS jumper at 0, BUSY pin connected |
 
@@ -233,7 +255,7 @@ All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
 | File | Purpose |
 |---|---|
 | `ESP32_WEATHER_EPAPER.ino` | Main program: WiFi, fetch, layout, sleep and retry logic |
-| `local_sensor.cpp/.h` | Indoor sensor (DHT22) reading |
+| `local_sensor.cpp/.h` | Indoor sensor reading (DHT22, BMP280) and sea-level conversion |
 | `weather_icons.cpp/.h` | Weather icons drawn for each condition |
 | `panel.h` | The one place that names the display: size, colours and panel calls |
 | `wifi_setup.cpp/.h` | Setup portal (access point, web page, saving WiFi credentials and settings) |
@@ -255,6 +277,14 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.6
+- Indoor air pressure from a BMP280 on I2C (GPIO21 / GPIO22), shown in hPa under the indoor
+  temperature and humidity. It is converted to sea level with the elevation from Open-Meteo.
+- The INDOOR tile is now a box with the title written vertically on its right side.
+- A change in pressure also counts as "indoor changed" for the refresh-skip check while
+  updates fail.
+- The forecast view shows today and the next 2 days (was tomorrow and the 2 days after).
 
 ### 0.5
 - Location (name, latitude, longitude) is set in the setup portal and stored in flash,

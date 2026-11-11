@@ -1,5 +1,5 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.5 (see "Version history" in README.md)
+// Version 0.6 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
@@ -8,8 +8,9 @@
 // a 3-day forecast, a 12-hour temperature/humidity graph and an optional picture (see "bottom area").
 //
 // SETUP
-//  1. Library Manager: install "ArduinoJson" (v7) and "DHT sensor library" (Adafruit,
-//     also installs "Adafruit Unified Sensor").
+//  1. Library Manager: install "ArduinoJson" (v7), "DHT sensor library" (Adafruit,
+//     also installs "Adafruit Unified Sensor") and "Adafruit BMP280 Library"
+//     (also installs "Adafruit BusIO").
 //  2. Open this .ino from its folder "ESP32_WEATHER_EPAPER" (the Arduino IDE needs the
 //     folder name to match). The Waveshare driver files are already in this folder.
 //  3. WiFi: after power-up / reset, join the "Weather-Setup" network with a phone and
@@ -40,7 +41,13 @@
  *   OUT / DATA   | D32       | DHT22_PIN in local_sensor.cpp
  *   - / GND      | GND       |
  *
- * Keep D21 (SDA) / D22 (SCL) free for a future I2C pressure sensor.
+ *   BMP280 module | ESP32 pin | Note
+ *   --------------+-----------+-----------------------------------
+ *   VCC / VIN     | 3V3       | forced mode: sleeps between readings
+ *   GND           | GND       |
+ *   SDA           | D21       | BMP_SDA in local_sensor.cpp
+ *   SCL           | D22       | BMP_SCL in local_sensor.cpp
+ *   (I2C address 0x76 or 0x77, both are tried)
  *
  * BS jumper on the display: 0 (4-line SPI).
  * Leave D12 unconnected (strapping pin, can block boot/flashing).
@@ -105,12 +112,13 @@ struct Weather {
   int hum, code;
   char hhmm[6];
   char ddmm[6];
-  DayForecast days[3];   // tomorrow and the 2 days after
+  DayForecast days[3];   // today and the next 2 days
   bool haveDays;         // false if the forecast part of the reply was missing
   int8_t htemp[HOURS_SHOWN];   // hourly temperature, rounded (small, as this lives in RTC memory)
   uint8_t hhum[HOURS_SHOWN];   // hourly humidity, %
   uint8_t hour0;               // hour of day (0..23) of the first point
   bool haveHours;              // false if the hourly part of the reply was missing
+  float elevation;             // metres above sea level of the location, NAN if missing
 };
 
 // Views for the bottom area (see "bottom area" below). Defined up here, before any
@@ -127,6 +135,8 @@ RTC_DATA_ATTR static uint8_t failCount = 0;   // failed fetches in a row, 0..MAX
 RTC_DATA_ATTR static bool shownLocOk = false;   // false = screen shows "--"
 RTC_DATA_ATTR static int shownTemp = 0;
 RTC_DATA_ATTR static int shownHum = 0;
+RTC_DATA_ATTR static bool shownPressOk = false;  // false = screen shows "--" for pressure
+RTC_DATA_ATTR static int shownPress = 0;         // hPa
 
 // Settings from the setup portal (flash), read again on every wake in setup().
 static StationSettings cfg;
@@ -187,7 +197,7 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
   WiFiClientSecure client;
   client.setInsecure();  // skips certificate check; fine for public weather data
 
-  // "daily" with forecast_days=4 gives today (index 0) plus the 3 days shown in the bottom area.
+  // "daily" with forecast_days=3 gives today (index 0) and the next 2 days, as shown in the bottom area.
   // "hourly" starts at 00:00 today (local time), so the current hour is also its index.
   char url[480];
   snprintf(url, sizeof(url),
@@ -196,7 +206,7 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
            "wind_speed_10m,weather_code"
            "&hourly=temperature_2m,relative_humidity_2m"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-           "&forecast_days=4&timezone=auto",
+           "&forecast_days=3&timezone=auto",
            lat, lon);
 
   HTTPClient http;
@@ -231,6 +241,9 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
   w.hum = cur["relative_humidity_2m"] | 0;
   w.wind = cur["wind_speed_10m"] | 0.0f;
   w.code = cur["weather_code"] | -1;
+  // Height of the location (top level of the reply), used to turn the BMP280's
+  // station pressure into sea-level pressure.
+  w.elevation = doc["elevation"] | NAN;
 
   strcpy(w.hhmm, "--:--");
   const char *ts = cur["time"] | "";  // e.g. "2026-10-07T21:45" (local time)
@@ -248,10 +261,11 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
   // Forecast for the bottom area. Missing data only hides the forecast, the fetch still counts as OK.
   w.haveDays = false;
   JsonObject daily = doc["daily"];
-  if (!daily.isNull() && daily["time"].size() >= 4) {
+  // Today's values are for the whole day, including the hours already past.
+  if (!daily.isNull() && daily["time"].size() >= 3) {
     w.haveDays = true;
     for (int i = 0; i < 3; i++) {
-      int k = i + 1;   // skip today
+      int k = i;   // 0 = today
       DayForecast &d = w.days[i];
       d.code = daily["weather_code"][k] | -1;
       d.tmax = daily["temperature_2m_max"][k] | 0.0f;
@@ -294,8 +308,9 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
 //   y  0..20  black header: city left, update time right
 //   y 21..23  yellow accent line
 //   y 26..66  icon left (cx 26), description right of it, temp + humidity below that
-//   y 69..102 tiles: FEELS (x 2), WIND (x 54, under the temp), INDOOR (x 126)
-//   y 105     divider
+//   y 69..102 tiles: FEELS (x 2), WIND (x 54, under the temp)
+//   y 67..104 INDOOR box (x 110..199): T/H, pressure below, "INDOOR" written vertically on the right
+//   y 105     divider (1X1 lines land 1 px up/left, so its pixels are really on row 104)
 // Note: Paint_DrawString_EN takes the BACKGROUND colour first, then the TEXT colour
 // (GUI_Paint.h names them the other way round, but the code swaps them):
 //   Paint_DrawString_EN(x, y, "Hello", &Font16, COL_WHITE, COL_RED);
@@ -307,7 +322,12 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
 #define TILE_Y    69    // tile titles; values go 13 px lower
 #define DIVIDER_Y 105
 #define HUM_X     (EPD_WIDTH - 60)   // 140
-#define INDOOR_X  (EPD_WIDTH - 74)   // 126
+// INDOOR box. Passed to Paint_DrawRectangle like the divider, so the lines land 1 px
+// up/left: left edge on x 110, top on y 67, right on x 199, bottom on the divider row.
+#define INDOOR_BOX_X (EPD_WIDTH - 89)       // 111 -> pixel column 110
+#define INDOOR_BOX_Y 68                     // -> pixel row 67 (outdoor humidity ends at 65)
+#define INDOOR_VAL_X (INDOOR_BOX_X + 1)     // 112: T/H and pressure start here
+#define INDOOR_VAL_W 77                     // 112..188, then the vertical "INDOOR" at 190..197
 
 // One reading: the number in black (big Font20 unless told otherwise) and its unit in
 // small red Font12, bottoms lined up. Returns the x just after the unit, so the next
@@ -344,22 +364,56 @@ static void drawHeader(const char *right, bool red) {
   else     Paint_DrawString_EN(x, 4, right, &Font12, COL_WHITE, COL_BLACK);
 }
 
-// Indoor tile at x 126: temperature and humidity side by side (126..198).
-// ok = false (sensor read failed) shows "--" instead of numbers.
-// A future pressure reading fits on a second line at y 104 ("1013" + Font8 "hPa" = 71 px);
-// move DIVIDER_Y down then.
+// Text turned 90 degrees clockwise, read from top to bottom; (x, y) is its top-left corner.
+// Paint_DrawString_EN can't rotate one string, so this reads the font bitmap the same way
+// Paint_DrawChar does (one bit per pixel, leftmost pixel in the top bit) and turns each
+// glyph row into a column. The text is font->Height px wide and font->Width px per char tall.
+static void drawVerticalText(int x, int y, const char *s, sFONT *font, UWORD color) {
+  const int rowBytes = (font->Width + 7) / 8;
+  for (int i = 0; s[i]; i++) {
+    const uint8_t *glyph = &font->table[(s[i] - ' ') * font->Height * rowBytes];
+    for (int r = 0; r < font->Height; r++) {
+      for (int c = 0; c < font->Width; c++) {
+        if (glyph[r * rowBytes + c / 8] & (0x80 >> (c % 8))) {
+          // glyph top (r = 0) faces right, glyph left (c = 0) faces up
+          Paint_SetPixel(x + font->Height - 1 - r, y + i * font->Width + c, color);
+        }
+      }
+    }
+  }
+}
+
+// Indoor box, x 110..199, y 67..104 (its bottom edge is the divider):
+//   y 69..88   temperature and humidity side by side (Font20, x 112..188)
+//   y 88..103  sea-level pressure, e.g. "1013hPa" (Font16 digits, Font12 unit, 65 px)
+//   x 190..197 "INDOOR" written vertically (Font8, y 71..100)
+// ok = false (DHT22 read failed) shows "--" for T/H; pressure NAN (BMP280 failed) shows "--".
 static void drawLocal(const LocalReading &loc, bool ok) {
-  char buf[8];
-  drawTitle(INDOOR_X, "INDOOR");
+  char t[8], h[8], p[8];
+  Paint_DrawRectangle(INDOOR_BOX_X, INDOOR_BOX_Y, EPD_WIDTH, DIVIDER_Y,
+                      COL_BLACK, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+  drawVerticalText(EPD_WIDTH - 10, INDOOR_BOX_Y + 3, "INDOOR", &Font8, COL_BLACK);
 
   // lroundf here and in setup()'s "indoor changed?" check, so both round the same way
-  if (ok) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.temp));
-  else    snprintf(buf, sizeof(buf), "--");
-  int x = drawReading(INDOOR_X, TILE_Y + 13, buf, "C");
+  if (ok) {
+    snprintf(t, sizeof(t), "%d", (int)lroundf(loc.temp));
+    snprintf(h, sizeof(h), "%d", (int)lroundf(loc.hum));
+  } else {
+    snprintf(t, sizeof(t), "--");
+    snprintf(h, sizeof(h), "--");
+  }
+  // "22C 55%" is 73 px in Font20; something wider like "-5C 55%" drops to Font16 to stay
+  // clear of the vertical "INDOOR".
+  sFONT *f = &Font20;
+  if (readingWidth(t, "C", f) + 3 + readingWidth(h, "%", f) > INDOOR_VAL_W) f = &Font16;
+  int x = drawReading(INDOOR_VAL_X, INDOOR_BOX_Y + 1, t, "C", f);
+  drawReading(x + 3, INDOOR_BOX_Y + 1, h, "%", f);
 
-  if (ok) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.hum));
-  else    snprintf(buf, sizeof(buf), "--");
-  drawReading(x + 3, TILE_Y + 13, buf, "%");
+  if (isnan(loc.pressure)) snprintf(p, sizeof(p), "--");
+  else                     snprintf(p, sizeof(p), "%d", (int)lroundf(loc.pressure));
+  // Font16 cell is y 88..103: its top row overlaps the T/H cell's last row, but both are
+  // blank there, and it stops just above the box's bottom edge on row 104.
+  drawReading(INDOOR_VAL_X, INDOOR_BOX_Y + 20, p, "hPa", &Font16, &Font12);
 }
 
 static void drawDivider() {
@@ -394,7 +448,7 @@ static void drawCentered(int cx, int y, const char *s) {
   Paint_DrawString_EN(cx - Font12.Width * strlen(s) / 2, y, s, &Font12, COL_WHITE, COL_BLACK);
 }
 
-// View 1: the next 3 days in three 66 px columns: day name, icon, max/min, chance of rain.
+// View 1: today and the next 2 days in three 66 px columns: day name, icon, max/min, chance of rain.
 // w = nullptr (no weather ever fetched) or no forecast data shows "No forecast".
 static void drawBottomForecast(const Weather *w) {
   if (w == nullptr || !w->haveDays) {
@@ -656,10 +710,13 @@ void setup() {
       (cfg.flags & FLAG_SHOW_IMAGE) ? "on" : "off");
 
   // 0b. indoor sensor (independent of WiFi, so it is available even if the fetch fails)
-  LocalReading loc = {0, 0};
+  LocalReading loc = {0, 0, NAN};
   bool locOk = readLocalSensor(loc);
   if (locOk) LOG("Indoor: %.1f C, %.0f %%\n", loc.temp, loc.hum);
   else       LOG("Indoor sensor read failed\n");
+  bool pressOk = readPressureSensor(loc);   // false = loc.pressure is NAN
+  if (pressOk) LOG("Pressure: %.1f hPa (station)\n", loc.pressure);
+  else         LOG("Pressure sensor not found or read failed\n");
 
   // 1. WiFi + fetch
   Weather w;
@@ -701,11 +758,22 @@ void setup() {
   else if (failCount < MAX_FAIL_COUNT) failCount++;
   if (!ok) LOG("Failure %u in a row, next retry in %u min\n", (unsigned)failCount, (unsigned)(retrySeconds() / 60));
 
+  // Sea-level pressure needs the location's elevation from Open-Meteo: from this fetch,
+  // or from the last good one if this one failed. Before the first good fetch the raw
+  // station pressure is shown.
+  float elev = ok ? w.elevation : (haveLast ? lastW.elevation : NAN);
+  if (pressOk && !isnan(elev)) {
+    loc.pressure = seaLevelPressure(loc.pressure, elev);
+    LOG("Pressure: %.1f hPa at sea level (elevation %.0f m)\n", loc.pressure, elev);
+  }
+
   // Would the indoor box look different from what is on the screen now?
   int newTemp = (int)lroundf(loc.temp);
   int newHum = (int)lroundf(loc.hum);
+  int newPress = pressOk ? (int)lroundf(loc.pressure) : 0;
   bool indoorChanged = (locOk != shownLocOk) ||
-                       (locOk && (newTemp != shownTemp || newHum != shownHum));
+                       (locOk && (newTemp != shownTemp || newHum != shownHum)) ||
+                       (pressOk != shownPressOk) || (pressOk && newPress != shownPress);
 
   if (ok) {
     lastW = w;       // remember for later failed attempts (survives deep sleep)
@@ -751,6 +819,8 @@ void setup() {
   shownLocOk = locOk;
   shownTemp = newTemp;
   shownHum = newHum;
+  shownPressOk = pressOk;
+  shownPress = newPress;
   // The bottom area alternates: the next refresh shows the next view.
   nextBottomView();
 
