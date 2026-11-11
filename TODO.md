@@ -1,11 +1,10 @@
 # TODO
 
-## Make bitmap bottom screen optional.
-Since not practical use at the moment make it so it can be disabled from setup screen.
-Later it will be used to fetch a prepared bitmap from local network with custom information similar to other e-ink solutions out there.
-When enabled user may also put the url path to fetch the image at setup.
+## Bitmap bottom screen: fetch from local network
+The bitmap view can already be turned on/off in the setup portal. Next: fetch a prepared
+bitmap from the local network with custom information, similar to other e-ink solutions.
+When the view is enabled, the user enters the URL to fetch the image from at setup.
 
-- [x] Checkbox in the setup portal, stored as bit 0 of the `flags` byte (default off).
 - [ ] URL field for fetching the image from the local network.
 
 ## Push button: refresh now / open setup
@@ -17,7 +16,7 @@ One button on the case:
 ### Hardware
 - Push button (normally open) between **GPIO33** and **GND**.
 - GPIO33 is a free RTC pin, so it can wake the ESP32 from deep sleep, and it has an internal
-  pull-up. It is not a strapping pin and is not on the I2C pins (21/22) kept for the pressure sensor.
+  pull-up. It is not a strapping pin and is not on the I2C pins (21/22) used by the BMP280.
 - Optional: an external 100 kΩ pull-up to 3V3 and a 100 nF capacitor across the button,
   for hardware debounce and a pull-up that doesn't depend on the RTC settings.
 - Avoid GPIO0/2/12/15 (strapping pins). GPIO34-39 only work with an external pull-up
@@ -40,7 +39,7 @@ One button on the case:
       "still failing, indoor unchanged" check would skip it.
 - [ ] **Long press = portal without reset:** unlike EN, RTC memory is kept, so the last weather,
       failure count and bottom view survive. After the portal, carry on with a normal refresh.
-- [ ] **Next timer:** after a button refresh, sleep a full `REFRESH_MINUTES` again.
+- [ ] **Next timer:** after a button refresh, sleep a full refresh period (`cfg.refreshMin`) again.
 - [ ] **Too many refreshes:** Waveshare asks for >= 3 min between refreshes. Either accept that
       a button press is rare, or ignore short presses within ~1 min of the last refresh
       (keep the last refresh time in RTC memory; no clock, so track it with sleep time).
@@ -60,7 +59,7 @@ for setup: a long press does setup without losing the last weather. B is the fal
 press-length detection proves unreliable.
 
 ## Split the .ino into modules
-The .ino (~720 lines) mixes fetching, drawing and the wake/sleep flow. Move the first
+The .ino (~830 lines) mixes fetching, drawing and the wake/sleep flow. Move the first
 two into their own files, like `local_sensor` and `wifi_setup`. Only moves code, no
 behaviour change.
 
@@ -76,7 +75,7 @@ behaviour change.
 Things to handle:
 - `LOG` / `DEBUG_LOG` must move to a small `log.h`, since a `#define` in the .ino is not
   seen by other .cpp files (so the switch leaves the settings block).
-- Pass `CITY` and `SETUP_PORTAL_SECONDS` to the screen functions as parameters. `setup()`
+- Pass `cfg` (city, lat, lon, flags) and `SETUP_PORTAL_SECONDS` to the screen functions as parameters. `setup()`
   uses `img` directly: expose it, or add a `showImage()` that does init + display
   (this also fits the "Panel calls" wrapper above).
 - `DAY_NAMES` is used by the forecast log in `setup()`: expose it or move that log.
@@ -84,28 +83,24 @@ Things to handle:
 - The "define `BottomView` early for the IDE prototypes" note can go, since .cpp files
   get no auto-generated prototypes.
 
-## Set the city in the setup portal
-`CITY`, `LAT` and `LON` are hard-coded. The forecast API only takes coordinates, but
-Open-Meteo's free Geocoding API (no key) turns a name into them:
+## Look up the city automatically (geocoding)
+The portal already takes the name, LAT and LON by hand (plus preset buttons). Add an
+automatic lookup as an extra option; manual entry stays as the fallback when the API
+can't be reached or finds nothing.
+The forecast API only takes coordinates, but Open-Meteo's free Geocoding API (no key)
+turns a name into them:
 `https://geocoding-api.open-meteo.com/v1/search?name=Athens&count=1&language=en&format=json`
 (`results[0]` has `name`, `latitude`, `longitude`, `country`; sorted by population,
 optional `&countryCode=GR`).
 
-- [ ] **Portal:** add a "City" field next to the WiFi name and password, saved in NVS.
 - [ ] **Geocode once:** the portal runs in AP mode without internet, so look the city up
       on the next normal wake (already on WiFi). Save `lat`, `lon` and the returned name
       in NVS; later wakes just read them. Only look up again when the city changes.
-- [ ] **Fallback:** if the lookup fails or finds nothing, keep the old coordinates (or the
-      `LAT`/`LON` defaults) and retry on a later wake.
-
-As 1st option: User can search the Lat Lon and in config form set the name , Lat and Lon.
-(Done: name / LAT / LON fields in the portal, "Fill in ATHENS" preset button, presets in `settings.cpp`.)
-As 2nd option: Auto search will be an additional option. That way user can cover cases of API failure to connect / or fail to find.
+- [ ] **Fallback:** if the lookup fails or finds nothing, keep the saved coordinates
+      (entered by hand or from a preset) and retry on a later wake.
 
 Things to handle:
-- Header room: Font16 is 11 px wide and the date/time starts near x 119, so about
-  10 characters fit. Cut longer names.
-- Header is ASCII only: uppercase the name and replace or drop non-ASCII characters
-  (e.g. "Sao Paulo", "Zurich").
+- Geocoder names are mixed case with accents: uppercase them and turn accented letters
+  into plain ones (e.g. "São Paulo" -> "SAO PAULO"). `cleanCityName()` only replaces
+  them with `?` today.
 - Same-name towns: log the matched country; maybe an optional country field in the portal.
-- Optional: let the portal take lat/lon directly for places geocoding doesn't know.

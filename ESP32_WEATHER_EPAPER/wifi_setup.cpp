@@ -64,6 +64,19 @@ static bool parseCoord(String s, float limit, float &out) {
   return true;
 }
 
+// Refresh period as typed on the form: a whole number of minutes,
+// REFRESH_MIN_MINUTES..REFRESH_MAX_MINUTES.
+static bool parseMinutes(String s, uint16_t &out) {
+  s.trim();
+  if (s.length() == 0 || s.length() > 4) return false;
+  char *end;
+  unsigned long v = strtoul(s.c_str(), &end, 10);
+  if (*end != 0 || !isdigit((unsigned char)s[0])) return false;   // junk, or a sign like "-5"
+  if (v < REFRESH_MIN_MINUTES || v > REFRESH_MAX_MINUTES) return false;
+  out = (uint16_t)v;
+  return true;
+}
+
 static void handleRoot() {
   String ssid, pass;
   getWifiCredentials(ssid, pass);
@@ -117,7 +130,21 @@ static void handleRoot() {
             "and <b>admin1</b> if several places share the name). "
             "<b>&amp;countryCode=GR</b> is optional: it keeps only places in that country "
             "(2-letter code, e.g. IT, DE); remove it to search everywhere. "
-            "Two decimals are enough. South and west are negative.</p>"
+            "Two decimals are enough. South and west are negative.</p>");
+
+  // Refresh period. min/max come from settings.h, the same limits handleSave() checks.
+  snprintf(buf, sizeof(buf), "%d to %d", REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES);
+  body += F("<h3>Updates</h3><label>Refresh every (minutes, ");
+  body += buf;
+  body += F(")</label><input name=refresh type=number step=1 required min=");
+  body += REFRESH_MIN_MINUTES;
+  body += F(" max=");
+  body += REFRESH_MAX_MINUTES;
+  body += F(" value=");
+  body += s.refreshMin;
+  body += F(">"
+            "<p class=hint>A full refresh takes about 15-20 s. Waveshare recommends at least "
+            "3 minutes between refreshes. Longer = longer battery life.</p>"
 
             "<h3>Bottom area</h3>"
             "<label><input type=checkbox name=img value=1");
@@ -165,6 +192,14 @@ static void handleSave() {
               "e.g. 37.98 and 23.73).");
     return;
   }
+  uint16_t refresh;
+  if (!parseMinutes(server.arg("refresh"), refresh)) {
+    char msg[96];
+    snprintf(msg, sizeof(msg), "Invalid refresh time: use a whole number of minutes from %d to %d.",
+             REFRESH_MIN_MINUTES, REFRESH_MAX_MINUTES);
+    sendError(msg);
+    return;
+  }
 
   if (newWifi) {
     Preferences prefs;
@@ -178,11 +213,13 @@ static void handleSave() {
   strlcpy(s.city, city.c_str(), sizeof(s.city));
   s.lat = lat;
   s.lon = lon;
+  s.refreshMin = refresh;
   if (server.hasArg("img")) s.flags |= FLAG_SHOW_IMAGE;    // a checkbox is only sent when ticked
   else                      s.flags &= ~FLAG_SHOW_IMAGE;
   saveSettings(s);
 
-  String msg = "<p>Saved. Location: <b>" + htmlEscape(s.city) + "</b>.</p>";
+  String msg = "<p>Saved. Location: <b>" + htmlEscape(s.city) + "</b>, refresh every <b>" +
+               String(s.refreshMin) + "</b> min.</p>";
   if (newWifi) msg += "<p>The station will now connect to <b>" + htmlEscape(ssid) + "</b>.</p>";
   msg += F("<p>You can close this page.</p>");
   sendPage(msg);
