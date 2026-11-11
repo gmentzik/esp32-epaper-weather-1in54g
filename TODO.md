@@ -105,7 +105,7 @@ Things to handle:
   them with `?` today.
 - Same-name towns: log the matched country; maybe an optional country field in the portal.
 
-## Picture view: city, pressure and altitude on top of the image
+## Picture view: info on top of the image (city, pressure, altitude, sunrise/sunset)
 After `drawBottomImage()` draws the picture, write a few lines over it with
 `Paint_DrawString_EN`. Each line gets its own solid background box, so it stays readable
 over the black mountains or the yellow sun. Example, top left:
@@ -113,7 +113,22 @@ over the black mountains or the yellow sun. Example, top left:
  ATHENS          (Font16)
  1013 hPa        (Font12)
  Alt 152 m       (Font12)
+ Sun 06:58-17:12 (Font12, 105 px)
 ```
+Four lines take about 16 + 3 x 12 px plus small gaps, about 58 of the 94 px.
+
+### Sunrise and sunset
+Open-Meteo has them as daily values: add `sunrise,sunset` to `&daily=` in
+`fetchWeather()`. With `timezone=auto` they come as local times, e.g.
+`"2026-11-12T06:58"`; only today (index 0) is needed.
+- Store them as minutes since midnight (`uint16_t`, 0..1439) in `Weather`, which lives in
+  RTC memory: 2 bytes each instead of a string.
+- When this fetch failed and the last weather is shown, the times are from the day of
+  that fetch. They change by only ~1-2 min a day, so showing them is fine.
+- Polar day/night: Open-Meteo then returns the same time for both, or nothing. Show `--`
+  when either value is missing.
+- Optional: small sun-up / sun-down icons instead of "Sun", or red for the times
+  (units/labels are red elsewhere).
 
 ### Where the displayed pressure comes from today
 The INDOOR pressure is always the BMP280 reading; no pressure is downloaded from Open-Meteo.
@@ -142,10 +157,12 @@ The overlay could show both: measured altitude (sensor) and map elevation (Open-
 ### Firmware
 - [ ] Add `pressure_msl` to `&current=` in `fetchWeather()`, store it in `Weather`, keep it
       in RTC memory like `elevation`, so the last value is still there when a fetch fails.
+- [ ] Add `sunrise,sunset` to `&daily=`, parse today's `"...THH:MM"` into minutes since
+      midnight, store them in `Weather` (see "Sunrise and sunset" above).
 - [ ] Keep the station pressure in its own variable: today `loc.pressure` is overwritten
       with the sea-level value in `setup()`.
-- [ ] Draw the overlay in `drawBottomImage()`; show `--` when there is no pressure reading
-      or no `pressure_msl` yet.
+- [ ] Draw the overlay in `drawBottomImage()`; show `--` when there is no pressure reading,
+      no `pressure_msl` or no sunrise/sunset yet.
 - [ ] The sample picture already has "SAMPLE IMAGE / tools/img2epd.ps1" at the top left:
       regenerate the demo without that text (`tools/img2epd.ps1 -Demo`), or put the overlay
       at the bottom left.
@@ -153,4 +170,5 @@ The overlay could show both: measured altitude (sensor) and map elevation (Open-
 ### To decide
 - Which pressure to show: sea-level (same as the INDOOR box) or station (raw reading)?
 - Show the map elevation next to the measured altitude?
+- Sunrise/sunset as one line ("Sun 06:58-17:12") or two lines ("Rise 06:58", "Set 17:12")?
 - Own on/off option in the setup portal (a `flags` bit), or always on with the picture view?

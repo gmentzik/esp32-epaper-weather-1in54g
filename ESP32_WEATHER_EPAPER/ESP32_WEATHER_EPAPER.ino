@@ -1,5 +1,5 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.8 (see "Version history" in README.md)
+// Version 0.9 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
@@ -102,8 +102,10 @@ struct DayForecast {
   int code;            // WMO weather code
   float tmax, tmin;
   int rain;            // max. chance of rain, %
+  uint8_t windBft;     // highest sustained wind of the day, Beaufort 0..12; BFT_NONE = missing
   uint8_t wday;        // 0 = Sunday
 };
+#define BFT_NONE 255   // no wind value in the reply: the forecast shows "--"
 
 struct Weather {
   float temp, feels, wind;
@@ -203,7 +205,8 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
            "wind_speed_10m,weather_code"
            "&hourly=temperature_2m,relative_humidity_2m"
-           "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+           "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+           "wind_speed_10m_max"
            "&forecast_days=3&timezone=auto",
            lat, lon);
 
@@ -269,6 +272,10 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
       d.tmax = daily["temperature_2m_max"][k] | 0.0f;
       d.tmin = daily["temperature_2m_min"][k] | 0.0f;
       d.rain = daily["precipitation_probability_max"][k] | 0;   // can be null; then 0
+      // km/h, like the current wind. Stored as Beaufort: one byte instead of a float in RTC memory.
+      // A missing value only hides the wind (shown as "--"), not the whole forecast.
+      float windMax = daily["wind_speed_10m_max"][k] | NAN;
+      d.windBft = isnan(windMax) ? BFT_NONE : beaufort(windMax);
       int yy = 0, mm = 0, dd = 0;
       const char *date = daily["time"][k] | "";   // e.g. "2026-10-31"
       if (sscanf(date, "%d-%d-%d", &yy, &mm, &dd) == 3 && mm >= 1 && mm <= 12) {
@@ -446,7 +453,8 @@ static void drawCentered(int cx, int y, const char *s) {
   Paint_DrawString_EN(cx - Font12.Width * strlen(s) / 2, y, s, &Font12, COL_WHITE, COL_BLACK);
 }
 
-// View 1: today and the next 2 days in three 66 px columns: day name, icon, max/min, chance of rain.
+// View 1: today and the next 2 days in three 66 px columns: day name, icon, max/min,
+// and on the last line the chance of rain and the day's highest wind force side by side.
 // w = nullptr (no weather ever fetched) or no forecast data shows "No forecast".
 static void drawBottomForecast(const Weather *w) {
   if (w == nullptr || !w->haveDays) {
@@ -471,8 +479,19 @@ static void drawBottomForecast(const Weather *w) {
     sFONT *f = strlen(buf) <= 5 ? &Font16 : &Font12;
     drawReading(cx - readingWidth(buf, "C", f) / 2, EPD_HEIGHT - 35, buf, "C", f);   // y 165..181
 
+    // Rain and wind side by side, centred as a pair in the 66 px column (y 186..198).
+    // Widest case "100%" (28 px) + "12Bft" (35 px) still fits with a 3 px gap.
+    char wind[4];
     snprintf(buf, sizeof(buf), "%d", d.rain);
-    drawReading(cx - readingWidth(buf, "%", &Font12) / 2, EPD_HEIGHT - 14, buf, "%", &Font12);   // y 186..198
+    if (d.windBft == BFT_NONE) snprintf(wind, sizeof(wind), "--");
+    else                       snprintf(wind, sizeof(wind), "%d", d.windBft);
+    int wRain = readingWidth(buf, "%", &Font12);
+    int wWind = readingWidth(wind, "Bft", &Font12);
+    int gap = dayW - 1 - wRain - wWind;   // dayW - 1 = 66, the column without its line
+    if (gap > 8) gap = 8;                 // keep the two close together when there is room
+    int x = x0 + (dayW - 1 - wRain - gap - wWind) / 2;
+    x = drawReading(x, EPD_HEIGHT - 14, buf, "%", &Font12);
+    drawReading(x + gap, EPD_HEIGHT - 14, wind, "Bft", &Font12);
   }
 }
 
@@ -738,8 +757,9 @@ void setup() {
           w.temp, w.feels, w.hum, w.wind, beaufort(w.wind), w.code, wmoText(w.code), w.ddmm, w.hhmm);
       if (!w.haveDays) LOG("No forecast in the reply\n");
       for (int i = 0; i < 3 && w.haveDays; i++) {
-        LOG("Day %d: %s code %d, %.0f/%.0f C, rain %d%%\n", i + 1, DAY_NAMES[w.days[i].wday % 7],
-            w.days[i].code, w.days[i].tmax, w.days[i].tmin, w.days[i].rain);
+        LOG("Day %d: %s code %d, %.0f/%.0f C, rain %d%%, wind %d Bft\n", i + 1, DAY_NAMES[w.days[i].wday % 7],
+            w.days[i].code, w.days[i].tmax, w.days[i].tmin, w.days[i].rain,
+            w.days[i].windBft == BFT_NONE ? -1 : w.days[i].windBft);   // -1 = missing
       }
       if (!w.haveHours) LOG("No hourly data in the reply\n");
       for (int i = 0; i < HOURS_SHOWN && w.haveHours; i++) {

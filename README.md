@@ -5,7 +5,7 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature, humidity and air pressure from local sensors. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.8** (see [Version history](#version-history)).
+Current version: **0.9** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -26,7 +26,7 @@ The current weather takes the top half of the screen. The **bottom area** (below
 divider, 200×94 px) switches view on every refresh:
 
 1. **3-day forecast:** today and the next 2 days, each with the day name, icon,
-   max/min temperature and chance of rain.
+   max/min temperature, chance of rain and the day's highest wind force (Bft).
 2. **Hourly graph:** temperature (red) and humidity (black) for the next 12 hours, with
    each one's min..max at the top and the hour every 3 hours along the bottom.
 3. **Picture (optional, off by default):** an image from `bottom_image.cpp` (a sample
@@ -49,7 +49,7 @@ divider, 200×94 px) switches view on every refresh:
 |  SAT   |   SUN    |   MON    |  bottom area, view 1: 3-day forecast
 | (icon) |  (icon)  |  (icon)  |
 | 24/15C |  22/14C  |  19/12C  |  max/min
-|  10%   |   60%    |   80%    |  chance of rain
+|10% 3Bft| 60% 5Bft | 80% 2Bft |  chance of rain, max wind
 +------------------------------+  (view 2: hourly graph, view 3: picture)
 ```
 
@@ -367,6 +367,13 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.9
+- The 3-day forecast shows each day's highest wind force in Beaufort next to the chance of
+  rain. It comes from Open-Meteo's daily `wind_speed_10m_max`: sustained wind (not gusts)
+  10 m above ground, the standard height the Beaufort scale is defined for, the same as
+  the WIND tile. Today's column shows the day's peak, so it can be higher than the WIND
+  tile, which is the wind right now. A missing value shows `--`.
 
 ### 0.8
 - Wiring diagram (Mermaid) at the top of the Wiring section: e-paper, DHT22 and BMP280
