@@ -104,3 +104,53 @@ Things to handle:
   into plain ones (e.g. "São Paulo" -> "SAO PAULO"). `cleanCityName()` only replaces
   them with `?` today.
 - Same-name towns: log the matched country; maybe an optional country field in the portal.
+
+## Picture view: city, pressure and altitude on top of the image
+After `drawBottomImage()` draws the picture, write a few lines over it with
+`Paint_DrawString_EN`. Each line gets its own solid background box, so it stays readable
+over the black mountains or the yellow sun. Example, top left:
+```
+ ATHENS          (Font16)
+ 1013 hPa        (Font12)
+ Alt 152 m       (Font12)
+```
+
+### Where the displayed pressure comes from today
+The INDOOR pressure is always the BMP280 reading; no pressure is downloaded from Open-Meteo.
+1. `readPressureSensor()` reads the **station pressure**: the real air pressure at the
+   sensor's height.
+2. It is converted to **sea-level pressure** with the location's `elevation` from Open-Meteo
+   (this fetch, or the last good one if this fetch failed), as weather reports quote it.
+   The elevation is the only thing taken from Open-Meteo. Before the first good fetch
+   there is no elevation, so the raw station pressure is shown.
+
+Example: in Athens at ~100 m, the sensor reads ~1001 hPa and the screen shows ~1013 hPa.
+
+### Altitude from pressure
+Formula: `altitude = 44330 * (1 - (P_station / P_sea)^(1/5.255))`. It needs the raw
+station reading **and** the real sea-level pressure at the place right now.
+
+| Source for P_sea | Accuracy | Note |
+|---|---|---|
+| Standard 1013.25 hPa | off by ±100-250 m | Weather moves pressure ±30 hPa; 1 hPa ≈ 8 m, so the value drifts with the weather |
+| Our calculated sea-level pressure | meaningless | It was computed from Open-Meteo's elevation, so it just returns that elevation (circular) |
+| **Open-Meteo `pressure_msl`** | ±10-20 m | A real value; the error is mostly the BMP280's ±1 hPa. Use this one |
+
+The overlay could show both: measured altitude (sensor) and map elevation (Open-Meteo's
+`elevation`, already fetched), e.g. "Alt 152 m (map 160 m)".
+
+### Firmware
+- [ ] Add `pressure_msl` to `&current=` in `fetchWeather()`, store it in `Weather`, keep it
+      in RTC memory like `elevation`, so the last value is still there when a fetch fails.
+- [ ] Keep the station pressure in its own variable: today `loc.pressure` is overwritten
+      with the sea-level value in `setup()`.
+- [ ] Draw the overlay in `drawBottomImage()`; show `--` when there is no pressure reading
+      or no `pressure_msl` yet.
+- [ ] The sample picture already has "SAMPLE IMAGE / tools/img2epd.ps1" at the top left:
+      regenerate the demo without that text (`tools/img2epd.ps1 -Demo`), or put the overlay
+      at the bottom left.
+
+### To decide
+- Which pressure to show: sea-level (same as the INDOOR box) or station (raw reading)?
+- Show the map elevation next to the measured altitude?
+- Own on/off option in the setup portal (a `flags` bit), or always on with the picture view?
