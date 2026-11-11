@@ -5,7 +5,7 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature, humidity and air pressure from local sensors. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.7** (see [Version history](#version-history)).
+Current version: **0.8** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -111,6 +111,93 @@ options) are kept in flash and are never cleared.
 ## Wiring
 
 GPIO numbers match the `Dxx` labels on most ESP32 dev boards.
+
+Overview (the tables below are the exact reference; keep both in sync when a pin changes):
+
+```mermaid
+flowchart LR
+  subgraph EPD["Waveshare 1.54 inch e-Paper (G)"]
+    E_VCC[VCC]
+    E_GND[GND]
+    E_DIN[DIN]
+    E_CLK[CLK]
+    E_CS[CS]
+    E_DC[DC]
+    E_RST[RST]
+    E_BUSY[BUSY]
+  end
+
+  subgraph ESP["ESP32 Dev Module"]
+    P_3V3[3V3]
+    P_GND[GND]
+    P14[GPIO14]
+    P13[GPIO13]
+    P15[GPIO15]
+    P27[GPIO27]
+    P26[GPIO26]
+    P25[GPIO25]
+    P32[GPIO32]
+    P21[GPIO21]
+    P22[GPIO22]
+    P33[GPIO33]
+    P12["GPIO12 (leave free)"]
+  end
+
+  subgraph DHT["DHT22"]
+    D_VCC["+ / VCC"]
+    D_DATA[OUT / DATA]
+    D_GND["- / GND"]
+  end
+
+  subgraph BMP["BMP280 (I2C)"]
+    B_VCC[VCC / VIN]
+    B_SDA[SDA]
+    B_SCL[SCL]
+    B_GND[GND]
+  end
+
+  subgraph BTN["Push button (planned, see TODO.md)"]
+    K_A["pin 1"]
+    K_B["pin 2"]
+  end
+
+  %% e-Paper (left) to ESP32
+  E_VCC --- P_3V3
+  E_GND --- P_GND
+  E_DIN ---|SPI MOSI| P14
+  E_CLK ---|SPI clock| P13
+  E_CS ---|chip select| P15
+  E_DC ---|data / command| P27
+  E_RST ---|reset| P26
+  E_BUSY ---|busy| P25
+
+  %% ESP32 to the sensors (right)
+  P_3V3 --- D_VCC
+  P32 ---|data| D_DATA
+  P_GND --- D_GND
+  D_DATA -.-|bare sensor only| R["10 kΩ pull-up to 3V3"]
+
+  P_3V3 --- B_VCC
+  P21 ---|I2C data| B_SDA
+  P22 ---|I2C clock| B_SCL
+  P_GND --- B_GND
+
+  %% Planned: normally-open button, GPIO33 to GND (internal pull-up, wakes from deep sleep)
+  P33 -.-|"short press = refresh, long press = setup"| K_A
+  P_GND -.- K_B
+
+  classDef power fill:#f8d7da,stroke:#c0392b,color:#000
+  classDef ground fill:#d6d8db,stroke:#333,color:#000
+  classDef free fill:#fff3cd,stroke:#b8860b,color:#000,stroke-dasharray:4 3
+  class E_VCC,P_3V3,D_VCC,B_VCC power
+  class E_GND,P_GND,D_GND,B_GND ground
+  classDef planned fill:#dbeafe,stroke:#2563eb,color:#000,stroke-dasharray:4 3
+  class P12,R free
+  class P33,K_A,K_B planned
+```
+
+The blue dashed parts (push button on GPIO33) are planned and not in the firmware yet;
+see "Push button" in `TODO.md`.
 
 ### e-Paper display
 
@@ -280,6 +367,11 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.8
+- Wiring diagram (Mermaid) at the top of the Wiring section: e-paper, DHT22 and BMP280
+  wired to the ESP32, power and ground colour-coded, GPIO12 marked as "leave free". The
+  planned push button on GPIO33 is drawn dashed. Documentation only, no firmware change.
 
 ### 0.7
 - The refresh period is set in the setup portal ("Updates" section) and stored in flash,
