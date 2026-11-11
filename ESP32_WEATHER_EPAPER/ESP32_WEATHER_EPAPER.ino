@@ -1,5 +1,5 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.6 (see "Version history" in README.md)
+// Version 0.7 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
@@ -71,12 +71,10 @@
 
 // ---------- settings ----------
 
-// Location (name, LAT, LON) and the picture view on/off are set in the setup portal
-// and stored in flash. Defaults and quick-fill locations: LOCATION_PRESETS in settings.cpp.
+// Location (name, LAT, LON), the refresh period and the picture view on/off are set in
+// the setup portal and stored in flash. Defaults and quick-fill locations: LOCATION_PRESETS
+// in settings.cpp. Refresh period default and limits: REFRESH_* in settings.h.
 
-// Full refresh takes ~15-20 s and Waveshare recommends >= 3 min between
-// refreshes. Keep this at 3 or more.
-const uint32_t REFRESH_MINUTES = 3;
 const uint32_t RETRY_MINUTES = 1;    // used when WiFi/fetch fails
 // Each failure in a row adds one more RETRY_MINUTES to the wait (1, 2, 3 ... min),
 // up to this many times, so a long outage doesn't drain the battery with retries.
@@ -706,7 +704,8 @@ void setup() {
 
   // Settings from flash, read after the portal so new values apply right away.
   loadSettings(cfg);
-  LOG("Location: '%s' (%.2f, %.2f), picture view %s\n", cfg.city, cfg.lat, cfg.lon,
+  LOG("Location: '%s' (%.2f, %.2f), refresh every %u min, picture view %s\n",
+      cfg.city, cfg.lat, cfg.lon, (unsigned)cfg.refreshMin,
       (cfg.flags & FLAG_SHOW_IMAGE) ? "on" : "off");
 
   // 0b. indoor sensor (independent of WiFi, so it is available even if the fetch fails)
@@ -825,7 +824,7 @@ void setup() {
   nextBottomView();
 
   // 3. sleep until next refresh (retry sooner if this attempt failed)
-  goToSleep(ok ? REFRESH_MINUTES * 60 : retrySeconds());
+  goToSleep(ok ? (uint32_t)cfg.refreshMin * 60 : retrySeconds());
 }
 
 void loop() {}

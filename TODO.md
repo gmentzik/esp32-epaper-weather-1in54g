@@ -39,7 +39,7 @@ One button on the case:
       "still failing, indoor unchanged" check would skip it.
 - [ ] **Long press = portal without reset:** unlike EN, RTC memory is kept, so the last weather,
       failure count and bottom view survive. After the portal, carry on with a normal refresh.
-- [ ] **Next timer:** after a button refresh, sleep a full `REFRESH_MINUTES` again.
+- [ ] **Next timer:** after a button refresh, sleep a full refresh period (`cfg.refreshMin`) again.
 - [ ] **Too many refreshes:** Waveshare asks for >= 3 min between refreshes. Either accept that
       a button press is rare, or ignore short presses within ~1 min of the last refresh
       (keep the last refresh time in RTC memory; no clock, so track it with sleep time).

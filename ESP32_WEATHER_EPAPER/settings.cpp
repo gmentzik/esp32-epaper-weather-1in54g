@@ -20,9 +20,14 @@ void loadSettings(StationSettings &s) {
   String city = prefs.getString("city", def.name);
   s.lat = prefs.getFloat("lat", def.lat);
   s.lon = prefs.getFloat("lon", def.lon);
+  uint16_t refresh = prefs.getUShort("refresh", REFRESH_DEFAULT_MINUTES);
   s.flags = prefs.getUChar("flags", 0);   // all options off by default
   prefs.end();
   strlcpy(s.city, city.c_str(), sizeof(s.city));   // never more than CITY_MAX_LEN
+  // Keep it in range even if flash holds a bad value, so the panel never refreshes too often
+  if (refresh < REFRESH_MIN_MINUTES) refresh = REFRESH_MIN_MINUTES;
+  if (refresh > REFRESH_MAX_MINUTES) refresh = REFRESH_MAX_MINUTES;
+  s.refreshMin = refresh;
 }
 
 void saveSettings(const StationSettings &s) {
@@ -31,6 +36,7 @@ void saveSettings(const StationSettings &s) {
   prefs.putString("city", s.city);
   prefs.putFloat("lat", s.lat);
   prefs.putFloat("lon", s.lon);
+  prefs.putUShort("refresh", s.refreshMin);
   prefs.putUChar("flags", s.flags);
   prefs.end();
 }

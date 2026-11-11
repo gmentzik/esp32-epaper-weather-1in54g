@@ -5,7 +5,7 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature, humidity and air pressure from local sensors. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.6** (see [Version history](#version-history)).
+Current version: **0.7** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -174,7 +174,6 @@ the ESP32 deep-sleeps. Module boards already have the I2C pull-up resistors.
 
    | Setting | Default | Meaning |
    |---|---|---|
-   | `REFRESH_MINUTES` | `15` | Time between updates. Keep it at 3 or more (Waveshare recommendation) |
    | `RETRY_MINUTES` | `1` | Base retry wait after a failure |
    | `MAX_FAIL_COUNT` | `15` | Maximum backoff steps |
    | `SETUP_PORTAL_SECONDS` | `120` | How long the WiFi setup portal stays open after power-up |
@@ -182,6 +181,8 @@ the ESP32 deep-sleeps. Module boards already have the I2C pull-up resistors.
 
    The default location (used until the portal saves one) and the quick-fill buttons
    on the setup page are `LOCATION_PRESETS` in `settings.cpp`. The first entry is the default.
+   The default refresh period (15 min) and its limits (3 to 1440 min) are `REFRESH_*` in
+   `settings.h`.
 
 6. **Board:** Tools → Board → *ESP32 Dev Module*, select the COM port, then Upload.
 
@@ -198,12 +199,13 @@ the ESP32 opens its own WiFi network for 2 minutes:
 3. Fill in the page (it shows the values stored now) and press **Save**.
    Press **Skip** to keep everything as it is and start right away.
 
-The page has three parts:
+The page has four parts:
 
 | Part | Fields |
 |---|---|
 | **WiFi** | Network name and password. Leave the name empty to keep the current network. |
 | **Location** | Name shown in the header (up to 10 plain ASCII characters, spaces at the ends are removed), latitude (-90 to 90) and longitude (-180 to 180). A **Fill in ATHENS** button fills in all three. |
+| **Updates** | *Refresh every*: minutes between screen updates, 3 to 1440 (default 15). Waveshare recommends at least 3; longer means longer battery life. |
 | **Bottom area** | *Show the picture view*: ticked = the picture is part of the rotation, not ticked (default) = it is skipped. |
 
 The station then connects and shows the weather. If nobody connects within 2 minutes, it
@@ -235,7 +237,8 @@ negative, e.g. New York is `40.71`, `-74.01`.
 2. Press EN (reset) on the ESP32 and set up WiFi and the location as described above.
 3. You should see the indoor reading, `WiFi connected`, `Fetch OK`, and then the panel
    refresh, which takes about 15-20 s.
-4. The ESP32 then deep-sleeps for `REFRESH_MINUTES` and repeats.
+4. The ESP32 then deep-sleeps for the refresh period set in the portal (default 15 min)
+   and repeats.
 
 **Troubleshooting**
 
@@ -277,6 +280,12 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.7
+- The refresh period is set in the setup portal ("Updates" section) and stored in flash,
+  instead of `REFRESH_MINUTES` in the code. Whole minutes, 3 to 1440; the default is
+  15 min (`REFRESH_*` in `settings.h`). Out-of-range values are refused by the page and
+  clamped when read from flash, so the panel never refreshes more often than every 3 min.
 
 ### 0.6
 - Indoor air pressure from a BMP280 on I2C (GPIO21 / GPIO22), shown in hPa under the indoor
