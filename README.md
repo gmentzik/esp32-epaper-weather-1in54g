@@ -102,7 +102,7 @@ options) are kept in flash and are never cleared.
 
 | Part | Notes |
 |---|---|
-| ESP32 dev board | "ESP32 Dev Module" (ESP32-WROOM-32) |
+| ESP32 dev board | "ESP32 Dev Module" (ESP32-WROOM-32) (https://www.waveshare.com/wiki/1.54inch_e-Paper_Module_(G)_Manual) |
 | Waveshare 1.54" e-Paper (G) | 200×200, black / white / yellow / red |
 | DHT22 (AM2302) module | temperature and humidity |
 | BMP280 module (I2C) | air pressure |
