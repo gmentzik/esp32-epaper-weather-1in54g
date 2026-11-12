@@ -4,6 +4,10 @@ A low-power weather station built on an ESP32 and a Waveshare 1.54" (G) 4-colour
 It shows the current outdoor weather from an online forecast service together with indoor
 temperature, humidity and air pressure from local sensors. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
+Initial Implementation is based on the examples and libraries provided by Waveshare website.
+Other useful source was: https://esp32io.com/tutorials/
+Screen design, code architecture and features is mainly decided by human (me).
+Claude code is used as coding assistant.
 
 Current version: **0.8** (see [Version history](#version-history)).
 
@@ -102,8 +106,8 @@ options) are kept in flash and are never cleared.
 
 | Part | Notes |
 |---|---|
-| ESP32 dev board | "ESP32 Dev Module" (ESP32-WROOM-32) (https://www.waveshare.com/wiki/1.54inch_e-Paper_Module_(G)_Manual) |
-| Waveshare 1.54" e-Paper (G) | 200×200, black / white / yellow / red |
+| ESP32 dev board | "ESP32 Dev Module" (ESP32-WROOM-32)  |
+| Waveshare 1.54" e-Paper (G) | 200×200, black / white / yellow / red ((https://www.waveshare.com/wiki/1.54inch_e-Paper_Module_(G)_Manual)) |
 | DHT22 (AM2302) module | temperature and humidity |
 | BMP280 module (I2C) | air pressure |
 | Jumper wires, USB cable | |
