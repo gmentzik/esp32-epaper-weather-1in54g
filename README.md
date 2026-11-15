@@ -5,7 +5,7 @@ It shows the current outdoor weather from an online forecast service together wi
 temperature, humidity and air pressure from local sensors. Between updates the ESP32 deep-sleeps and the
 panel is powered down, so the image stays on screen while drawing almost no power.
 
-Current version: **0.9** (see [Version history](#version-history)).
+Current version: **0.10** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -19,7 +19,8 @@ Current version: **0.9** (see [Version history](#version-history)).
   humidity from the DHT22, and below them the air pressure from the BMP280 in hPa
   (`--` for a sensor that can't be read). The pressure is converted to **sea level**, like
   weather reports, using the elevation Open-Meteo returns for the location. Until the first
-  good update the raw value at the sensor is shown.
+  good update it shows `--`, since the elevation isn't known yet. The raw value at the
+  sensor is always shown as AT SENSOR in [view 3](#view-3-height-pressure-sun).
 
 Numbers are black and their units (C, %, Bft, hPa) are red, so they are easy to tell apart.
 The current weather takes the top half of the screen. The **bottom area** (below the
@@ -29,7 +30,10 @@ divider, 200×94 px) switches view on every refresh:
    max/min temperature, chance of rain and the day's highest wind force (Bft).
 2. **Hourly graph:** temperature (red) and humidity (black) for the next 12 hours, with
    each one's min..max at the top and the hour every 3 hours along the bottom.
-3. **Picture (optional, off by default):** an image from `bottom_image.cpp` (a sample
+3. **Height, pressure, sun:** the sensor's height worked out from air pressure next to the
+   map height, the air pressure as measured and at sea level, and today's sunrise and
+   sunset. See [View 3: height, pressure, sun](#view-3-height-pressure-sun).
+4. **Picture (optional, off by default):** an image from `bottom_image.cpp` (a sample
    picture at first; see [Custom picture](#custom-picture)). Turn it on with
    *Show the picture view* in the [setup portal](#setup-portal); while it is off, the
    rotation skips it.
@@ -50,8 +54,42 @@ divider, 200×94 px) switches view on every refresh:
 | (icon) |  (icon)  |  (icon)  |
 | 24/15C |  22/14C  |  19/12C  |  max/min
 |10% 3Bft| 60% 5Bft | 80% 2Bft |  chance of rain, max wind
-+------------------------------+  (view 2: hourly graph, view 3: picture)
++------------------------------+  (view 2: hourly graph, view 3: see below, view 4: picture)
 ```
+
+View 3 in the bottom area:
+
+```
+|------------------------------|  divider
+|HEIGHT        MAP HEIGHT      |  titles
+|152m          160m            |  height from pressure, ground height of the place
+|AT SENSOR     SEA LEVEL       |  titles
+|1001hPa       1013hPa         |  pressure as measured, converted to sea level
+| (sun) 06:58 - 17:12 (moon)   |  today's sunrise and sunset
++------------------------------+
+```
+
+### View 3: height, pressure, sun
+
+| Value | What it shows |
+|---|---|
+| **HEIGHT** | How high the sensor is above sea level, worked out from air pressure. The BMP280 reading is compared with the sea-level pressure Open-Meteo reports for the location right now (`pressure_msl`). Air pressure drops by about 1 hPa for every 8 m you go up, so the difference between the two gives the height. It includes the floor you are on. Accuracy is about ±10-20 m, mostly from the sensor's ±1 hPa. |
+| **MAP HEIGHT** | The ground height at the set latitude and longitude, from Open-Meteo's terrain data. It is fixed for the place and does not change with the weather. HEIGHT minus MAP HEIGHT is roughly how high the sensor sits above the ground, plus the measurement error. |
+| **AT SENSOR** | The real air pressure where the sensor is ("station pressure"). It is lower the higher up you are, so it can't be compared with weather reports directly. |
+| **SEA LEVEL** | The AT SENSOR value converted to what it would be at sea level, using MAP HEIGHT. Weather reports give pressure this way, so it can be compared between places. It is the same number as in the INDOOR box. |
+| **Sun / moon line** | Today's sunrise (red sun) and sunset (black moon) at the set location, in local 24-hour time, from Open-Meteo. |
+
+Values that can't be shown appear as `--` (`--:--` for the times):
+
+- **No BMP280 reading:** HEIGHT, AT SENSOR and SEA LEVEL.
+- **No good update yet** since the last reset: HEIGHT, MAP HEIGHT, SEA LEVEL and the times.
+- **Polar day or night** (no sunrise or sunset): the times.
+
+The values from Open-Meteo (sea-level pressure, map height, sunrise and sunset) are saved
+in RTC memory after every good update. When later updates fail, they stay on screen. The
+times may then be from an earlier day, but they change by only a minute or two a day.
+RTC memory is RAM, so writing it on every update does not wear out the chip. The sensor
+values are read again on every wake.
 
 The bottom area is drawn by `drawBottom()` in the "bottom area" section of the `.ino`.
 To add another view, add it to the `BottomView` enum, write a `drawBottom...()` function,
@@ -293,7 +331,7 @@ The page has four parts:
 | **WiFi** | Network name and password. Leave the name empty to keep the current network. |
 | **Location** | Name shown in the header (up to 10 plain ASCII characters, spaces at the ends are removed), latitude (-90 to 90) and longitude (-180 to 180). A **Fill in ATHENS** button fills in all three. |
 | **Updates** | *Refresh every*: minutes between screen updates, 3 to 1440 (default 15). Waveshare recommends at least 3; longer means longer battery life. |
-| **Bottom area** | *Show the picture view*: ticked = the picture is part of the rotation, not ticked (default) = it is skipped. |
+| **Bottom area** | *Show the picture view* (view 4): ticked = the picture is part of the rotation, not ticked (default) = it is skipped. |
 
 The station then connects and shows the weather. If nobody connects within 2 minutes, it
 continues with the saved settings. Everything is stored in the ESP32's flash (NVS), so it
@@ -345,8 +383,8 @@ All code is in the `ESP32_WEATHER_EPAPER/` sketch folder.
 | File | Purpose |
 |---|---|
 | `ESP32_WEATHER_EPAPER.ino` | Main program: WiFi, fetch, layout, sleep and retry logic |
-| `local_sensor.cpp/.h` | Indoor sensor reading (DHT22, BMP280) and sea-level conversion |
-| `weather_icons.cpp/.h` | Weather icons drawn for each condition |
+| `local_sensor.cpp/.h` | Indoor sensor reading (DHT22, BMP280), sea-level and height-from-pressure conversion |
+| `weather_icons.cpp/.h` | Weather icons drawn for each condition, plus the sunrise/sunset icons |
 | `panel.h` | The one place that names the display: size, colours and panel calls |
 | `wifi_setup.cpp/.h` | Setup portal (access point, web page, saving WiFi credentials and settings) |
 | `settings.cpp/.h` | Stored settings: location, option flags, location presets |
@@ -367,6 +405,16 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.10
+- New bottom view 3 shows the height worked out from air pressure next to Open-Meteo's
+  map height, the pressure as measured and at sea level, and today's sunrise and sunset
+  with new sun and moon icons. See [View 3](#view-3-height-pressure-sun).
+- The picture moves from view 3 to view 4. It is still optional in the setup portal.
+- The INDOOR pressure shows `--` until the first good update, instead of the raw sensor
+  value, which is much lower than sea-level pressure and easy to misread.
+- The fetch also asks Open-Meteo for `pressure_msl` (current) and `sunrise`/`sunset`
+  (daily). They are kept in RTC memory like the rest of the weather, so they survive failed updates.
 
 ### 0.9
 - The 3-day forecast shows each day's highest wind force in Beaufort next to the chance of

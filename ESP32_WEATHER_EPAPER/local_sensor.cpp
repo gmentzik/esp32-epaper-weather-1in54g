@@ -65,3 +65,8 @@ float seaLevelPressure(float hPa, float elevationM) {
   // Barometric formula (standard atmosphere), the same one the Adafruit library uses.
   return hPa / powf(1.0f - elevationM / 44330.0f, 5.255f);
 }
+
+float altitudeFromPressure(float stationHPa, float seaHPa) {
+  // Same formula as seaLevelPressure(), solved for the height.
+  return 44330.0f * (1.0f - powf(stationHPa / seaHPa, 1.0f / 5.255f));
+}

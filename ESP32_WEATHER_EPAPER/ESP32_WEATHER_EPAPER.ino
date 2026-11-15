@@ -1,11 +1,12 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.9 (see "Version history" in README.md)
+// Version 0.10 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
 // deep-sleeps the ESP32 until the next refresh.
 // The bottom half of the screen changes on every refresh between views:
-// a 3-day forecast, a 12-hour temperature/humidity graph and an optional picture (see "bottom area").
+// a 3-day forecast, a 12-hour temperature/humidity graph, height / pressure / sunrise-sunset
+// and an optional picture (see "bottom area").
 //
 // SETUP
 //  1. Library Manager: install "ArduinoJson" (v7), "DHT sensor library" (Adafruit,
@@ -119,11 +120,13 @@ struct Weather {
   uint8_t hour0;               // hour of day (0..23) of the first point
   bool haveHours;              // false if the hourly part of the reply was missing
   float elevation;             // metres above sea level of the location, NAN if missing
+  float pressureMsl;           // sea-level pressure from Open-Meteo, hPa, NAN if missing
+  char sunrise[6], sunset[6];  // today, local time "06:58"; "--:--" if missing or polar day/night
 };
 
 // Views for the bottom area (see "bottom area" below). Defined up here, before any
 // function, so the prototypes the Arduino IDE generates can use the type.
-enum BottomView { VIEW_FORECAST, VIEW_HOURLY, VIEW_IMAGE };
+enum BottomView { VIEW_FORECAST, VIEW_HOURLY, VIEW_LOCATION, VIEW_IMAGE };
 
 // Kept in RTC memory so they survive deep sleep.
 RTC_DATA_ATTR static Weather lastW;
@@ -193,6 +196,17 @@ static void drawWeatherIcon(int c, int cx, int cy) {
   else iconUnknown(cx, cy);
 }
 
+// Copies the "06:58" out of a local time like "2026-11-12T06:58", or "--:--" if the text
+// is missing or too short. out needs 6 chars.
+static void copyHHMM(char *out, const char *ts) {
+  if (strlen(ts) >= 16) {
+    memcpy(out, ts + 11, 5);
+    out[5] = 0;
+  } else {
+    strcpy(out, "--:--");
+  }
+}
+
 static bool fetchWeather(Weather &w, float lat, float lon) {
   WiFiClientSecure client;
   client.setInsecure();  // skips certificate check; fine for public weather data
@@ -203,10 +217,10 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
   snprintf(url, sizeof(url),
            "https://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f"
            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
-           "wind_speed_10m,weather_code"
+           "wind_speed_10m,weather_code,pressure_msl"
            "&hourly=temperature_2m,relative_humidity_2m"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
-           "wind_speed_10m_max"
+           "wind_speed_10m_max,sunrise,sunset"
            "&forecast_days=3&timezone=auto",
            lat, lon);
 
@@ -245,6 +259,9 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
   // Height of the location (top level of the reply), used to turn the BMP280's
   // station pressure into sea-level pressure.
   w.elevation = doc["elevation"] | NAN;
+  // Sea-level pressure at the location right now, from the weather model. Together with
+  // the BMP280's station pressure it gives the sensor's height (view 3).
+  w.pressureMsl = cur["pressure_msl"] | NAN;
 
   strcpy(w.hhmm, "--:--");
   const char *ts = cur["time"] | "";  // e.g. "2026-10-07T21:45" (local time)
@@ -284,6 +301,16 @@ static bool fetchWeather(Weather &w, float lat, float lon) {
         w.haveDays = false;   // without a date the day names would be wrong
       }
     }
+  }
+
+  // Today's sunrise and sunset (index 0), local time thanks to timezone=auto. Not tied to
+  // haveDays: they don't need the rest of the forecast. In polar day or night Open-Meteo
+  // gives the same time for both (or nothing); both are then shown as "--:--".
+  copyHHMM(w.sunrise, daily["sunrise"][0] | "");
+  copyHHMM(w.sunset, daily["sunset"][0] | "");
+  if (strcmp(w.sunrise, w.sunset) == 0) {
+    strcpy(w.sunrise, "--:--");
+    strcpy(w.sunset, "--:--");
   }
 
   // Hourly graph: HOURS_SHOWN points from the current hour. Missing data only hides the graph.
@@ -392,7 +419,8 @@ static void drawVerticalText(int x, int y, const char *s, sFONT *font, UWORD col
 //   y 69..88   temperature and humidity side by side (Font20, x 112..188)
 //   y 88..103  sea-level pressure, e.g. "1013hPa" (Font16 digits, Font12 unit, 65 px)
 //   x 190..197 "INDOOR" written vertically (Font8, y 71..100)
-// ok = false (DHT22 read failed) shows "--" for T/H; pressure NAN (BMP280 failed) shows "--".
+// ok = false (DHT22 read failed) shows "--" for T/H. seaLevelPressure NAN (BMP280 failed, or
+// no location height yet) shows "--".
 static void drawLocal(const LocalReading &loc, bool ok) {
   char t[8], h[8], p[8];
   Paint_DrawRectangle(INDOOR_BOX_X, INDOOR_BOX_Y, EPD_WIDTH, DIVIDER_Y,
@@ -414,8 +442,8 @@ static void drawLocal(const LocalReading &loc, bool ok) {
   int x = drawReading(INDOOR_VAL_X, INDOOR_BOX_Y + 1, t, "C", f);
   drawReading(x + 3, INDOOR_BOX_Y + 1, h, "%", f);
 
-  if (isnan(loc.pressure)) snprintf(p, sizeof(p), "--");
-  else                     snprintf(p, sizeof(p), "%d", (int)lroundf(loc.pressure));
+  if (isnan(loc.seaLevelPressure)) snprintf(p, sizeof(p), "--");
+  else                             snprintf(p, sizeof(p), "%d", (int)lroundf(loc.seaLevelPressure));
   // Font16 cell is y 88..103: its top row overlaps the T/H cell's last row, but both are
   // blank there, and it stops just above the box's bottom edge on row 104.
   drawReading(INDOOR_VAL_X, INDOOR_BOX_Y + 20, p, "hPa", &Font16, &Font12);
@@ -442,7 +470,7 @@ static void startImage() {
 #define BOTTOM_W EPD_WIDTH                 // 200
 #define BOTTOM_H (EPD_HEIGHT - BOTTOM_Y)   // 94
 
-static const BottomView BOTTOM_ROTATION[] = { VIEW_FORECAST, VIEW_HOURLY, VIEW_IMAGE };
+static const BottomView BOTTOM_ROTATION[] = { VIEW_FORECAST, VIEW_HOURLY, VIEW_LOCATION, VIEW_IMAGE };
 static const uint8_t BOTTOM_VIEWS = sizeof(BOTTOM_ROTATION) / sizeof(BOTTOM_ROTATION[0]);
 RTC_DATA_ATTR static uint8_t bottomIndex = 0;   // which entry of BOTTOM_ROTATION is next
 
@@ -557,7 +585,69 @@ static void drawBottomHourly(const Weather *w) {
   Paint_DrawLine(X0, Y1 + 3, X1, Y1 + 3, COL_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);   // time axis, y 182
 }
 
-// View 3: a picture from bottom_image.cpp (made with tools/img2epd.ps1), centred in the area.
+// View 3: facts about the place, in titled tiles like FEELS / WIND (columns at x 4 and
+// LOC_COL2_X), then today's sunrise and sunset. Anything missing shows "--".
+//   y 108..119  titles: HEIGHT (sensor height from air pressure), MAP HEIGHT (Open-Meteo's ground height)
+//   y 121..140  values, Font20 + red "m", e.g. "152m" and "160m"
+//   y 143..154  titles: AT SENSOR (BMP280 as measured), SEA LEVEL (converted, same as INDOOR)
+//   y 156..171  values, Font16 + red "hPa", e.g. "1001hPa" and "1013hPa"
+//   y 177..197  red sun, "06:58 - 17:12" (Font16, y 179..194), black moon; 186 px, centred
+// w = nullptr (no weather ever fetched): only AT SENSOR can be shown.
+// The weather values come from w (this fetch, or the last good one kept in RTC memory);
+// the sensor value is read on every wake.
+#define LOC_COL2_X 104
+
+// Small black Font12 title for the view-3 tiles.
+static void drawLocTitle(int x, int y, const char *title) {
+  Paint_DrawString_EN(x, y, title, &Font12, COL_WHITE, COL_BLACK);
+}
+
+static void drawBottomLocation(const Weather *w, const LocalReading &loc) {
+  char buf[16];
+  bool haveStation = !isnan(loc.pressure);                 // BMP280 read OK
+  bool haveElev = w != nullptr && !isnan(w->elevation);    // map height known
+  bool haveMsl = w != nullptr && !isnan(w->pressureMsl);   // weather's sea-level pressure known
+
+  // Row 1: heights in metres.
+  drawLocTitle(4, BOTTOM_Y + 2, "HEIGHT");
+  if (haveStation && haveMsl) {
+    snprintf(buf, sizeof(buf), "%d", (int)lroundf(altitudeFromPressure(loc.pressure, w->pressureMsl)));
+  } else {
+    snprintf(buf, sizeof(buf), "--");
+  }
+  drawReading(4, BOTTOM_Y + 15, buf, "m");
+
+  drawLocTitle(LOC_COL2_X, BOTTOM_Y + 2, "MAP HEIGHT");
+  if (haveElev) snprintf(buf, sizeof(buf), "%d", (int)lroundf(w->elevation));
+  else          snprintf(buf, sizeof(buf), "--");
+  drawReading(LOC_COL2_X, BOTTOM_Y + 15, buf, "m");
+
+  // Row 2: pressure as measured, and converted to sea level (the same value as the INDOOR box).
+  drawLocTitle(4, BOTTOM_Y + 37, "AT SENSOR");
+  if (haveStation) snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.pressure));
+  else             snprintf(buf, sizeof(buf), "--");
+  drawReading(4, BOTTOM_Y + 50, buf, "hPa", &Font16, &Font12);
+
+  drawLocTitle(LOC_COL2_X, BOTTOM_Y + 37, "SEA LEVEL");
+  if (isnan(loc.seaLevelPressure)) snprintf(buf, sizeof(buf), "--");
+  else                             snprintf(buf, sizeof(buf), "%d", (int)lroundf(loc.seaLevelPressure));
+  drawReading(LOC_COL2_X, BOTTOM_Y + 50, buf, "hPa", &Font16, &Font12);
+
+  // Row 3: sun icon, "06:58 - 17:12", moon icon, centred as one group.
+  snprintf(buf, sizeof(buf), "%s - %s",               // always 13 chars, 143 px
+           w != nullptr ? w->sunrise : "--:--", w != nullptr ? w->sunset : "--:--");
+  const int SUN_W = 20, MOON_W = 15, GAP = 4;         // icon widths, see weather_icons.cpp
+  const int textW = Font16.Width * strlen(buf);
+  const int ty = EPD_HEIGHT - 21;                     // text y 179..194, icons centred on y 187
+  int x = (BOTTOM_W - (SUN_W + GAP + textW + GAP + MOON_W)) / 2;   // 7
+  iconSunrise(x + SUN_W / 2, ty + 8);
+  x += SUN_W + GAP;
+  Paint_DrawString_EN(x, ty, buf, &Font16, COL_WHITE, COL_BLACK);
+  x += textW + GAP;
+  iconMoon(x + MOON_W / 2, ty + 8);
+}
+
+// View 4: a picture from bottom_image.cpp (made with tools/img2epd.ps1), centred in the area.
 // The data uses the panel's own 2-bit colour codes, 4 pixels per byte, leftmost pixel in the top bits.
 static void drawBottomImage() {
   static_assert(BOTTOM_IMAGE_W <= BOTTOM_W && BOTTOM_IMAGE_H <= BOTTOM_H,
@@ -578,6 +668,7 @@ static const char *viewName(BottomView v) {
   switch (v) {
     case VIEW_FORECAST: return "forecast";
     case VIEW_HOURLY:   return "hourly";
+    case VIEW_LOCATION: return "location";
     case VIEW_IMAGE:    return "image";
   }
   return "?";
@@ -602,13 +693,15 @@ static BottomView dueBottomView() {
 }
 
 // Draws the bottom area with the view that is due now. w may be nullptr (no data yet).
-static void drawBottom(const Weather *w) {
+// loc is the indoor reading of this wake (view 3 shows its pressure).
+static void drawBottom(const Weather *w, const LocalReading &loc) {
   BottomView v = dueBottomView();
   LOG("Bottom view: %s\n", viewName(v));
   switch (v) {
-    case VIEW_FORECAST: drawBottomForecast(w); break;
-    case VIEW_HOURLY:   drawBottomHourly(w);   break;
-    case VIEW_IMAGE:    drawBottomImage();     break;
+    case VIEW_FORECAST: drawBottomForecast(w);      break;
+    case VIEW_HOURLY:   drawBottomHourly(w);        break;
+    case VIEW_LOCATION: drawBottomLocation(w, loc); break;
+    case VIEW_IMAGE:    drawBottomImage();          break;
   }
 }
 
@@ -649,7 +742,7 @@ static void drawWeather(const Weather &w, const LocalReading &loc, bool locOk, b
 
   drawLocal(loc, locOk);
   drawDivider();
-  drawBottom(&w);
+  drawBottom(&w, loc);
 }
 
 // Used when the very first fetch fails and there is no old data to show.
@@ -660,7 +753,7 @@ static void drawNoData(const LocalReading &loc, bool locOk) {
   Paint_DrawString_EN(TEXT_X, 27, "No data", &Font16, COL_BLACK, COL_WHITE);
   drawLocal(loc, locOk);
   drawDivider();
-  drawBottom(nullptr);
+  drawBottom(nullptr, loc);
 }
 
 // Shown while the WiFi setup portal is open, so the user knows what to join.
@@ -728,7 +821,7 @@ void setup() {
       (cfg.flags & FLAG_SHOW_IMAGE) ? "on" : "off");
 
   // 0b. indoor sensor (independent of WiFi, so it is available even if the fetch fails)
-  LocalReading loc = {0, 0, NAN};
+  LocalReading loc = {0, 0, NAN, NAN};
   bool locOk = readLocalSensor(loc);
   if (locOk) LOG("Indoor: %.1f C, %.0f %%\n", loc.temp, loc.hum);
   else       LOG("Indoor sensor read failed\n");
@@ -755,6 +848,8 @@ void setup() {
     if (ok) {
       LOG("Weather: %.1f C (feels %.1f), hum %d%%, wind %.0f km/h (Bft %d), code %d (%s), %s %s\n",
           w.temp, w.feels, w.hum, w.wind, beaufort(w.wind), w.code, wmoText(w.code), w.ddmm, w.hhmm);
+      LOG("Sea-level pressure %.1f hPa, map height %.0f m, sunrise %s, sunset %s\n",
+          w.pressureMsl, w.elevation, w.sunrise, w.sunset);
       if (!w.haveDays) LOG("No forecast in the reply\n");
       for (int i = 0; i < 3 && w.haveDays; i++) {
         LOG("Day %d: %s code %d, %.0f/%.0f C, rain %d%%, wind %d Bft\n", i + 1, DAY_NAMES[w.days[i].wday % 7],
@@ -778,21 +873,30 @@ void setup() {
   if (!ok) LOG("Failure %u in a row, next retry in %u min\n", (unsigned)failCount, (unsigned)(retrySeconds() / 60));
 
   // Sea-level pressure needs the location's elevation from Open-Meteo: from this fetch,
-  // or from the last good one if this one failed. Before the first good fetch the raw
-  // station pressure is shown.
+  // or from the last good one if this one failed. Before the first good fetch it stays
+  // NAN and the screen shows "--" (the raw value is still shown as AT SENSOR in view 3).
   float elev = ok ? w.elevation : (haveLast ? lastW.elevation : NAN);
   if (pressOk && !isnan(elev)) {
-    loc.pressure = seaLevelPressure(loc.pressure, elev);
-    LOG("Pressure: %.1f hPa at sea level (elevation %.0f m)\n", loc.pressure, elev);
+    loc.seaLevelPressure = seaLevelPressure(loc.pressure, elev);
+    LOG("Pressure: %.1f hPa at sea level (elevation %.0f m)\n", loc.seaLevelPressure, elev);
   }
+  bool seaOk = !isnan(loc.seaLevelPressure);   // false = INDOOR box shows "--" for pressure
+#if DEBUG_LOG
+  // Height from pressure (bottom view 3), logged here so it shows on every wake.
+  float msl = ok ? w.pressureMsl : (haveLast ? lastW.pressureMsl : NAN);
+  if (pressOk && !isnan(msl)) {
+    LOG("Height from pressure: %.0f m (sea-level pressure %.1f hPa from Open-Meteo)\n",
+        altitudeFromPressure(loc.pressure, msl), msl);
+  }
+#endif
 
   // Would the indoor box look different from what is on the screen now?
   int newTemp = (int)lroundf(loc.temp);
   int newHum = (int)lroundf(loc.hum);
-  int newPress = pressOk ? (int)lroundf(loc.pressure) : 0;
+  int newPress = seaOk ? (int)lroundf(loc.seaLevelPressure) : 0;
   bool indoorChanged = (locOk != shownLocOk) ||
                        (locOk && (newTemp != shownTemp || newHum != shownHum)) ||
-                       (pressOk != shownPressOk) || (pressOk && newPress != shownPress);
+                       (seaOk != shownPressOk) || (seaOk && newPress != shownPress);
 
   if (ok) {
     lastW = w;       // remember for later failed attempts (survives deep sleep)
@@ -838,7 +942,7 @@ void setup() {
   shownLocOk = locOk;
   shownTemp = newTemp;
   shownHum = newHum;
-  shownPressOk = pressOk;
+  shownPressOk = seaOk;
   shownPress = newPress;
   // The bottom area alternates: the next refresh shows the next view.
   nextBottomView();
