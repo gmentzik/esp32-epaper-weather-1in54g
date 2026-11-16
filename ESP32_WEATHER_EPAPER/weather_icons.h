@@ -16,4 +16,8 @@ void iconSnow(int cx, int cy);           // cloud + dots
 void iconThunderstorm(int cx, int cy);   // cloud + yellow bolt
 void iconUnknown(int cx, int cy);        // "?"
 
+// Small icons (about 20 x 20) for the sunrise / sunset line in the bottom area.
+void iconSunrise(int cx, int cy);        // small red sun
+void iconMoon(int cx, int cy);           // black crescent moon
+
 #endif

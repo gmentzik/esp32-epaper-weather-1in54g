@@ -5,15 +5,15 @@
 
 // ---------- building blocks ----------
 
-// Yellow disc with 8 rays. Rays run from r+3 out to r+len.
-static void drawSun(int cx, int cy, int r, int len) {
+// Disc with 8 rays (yellow for the weather icons). Rays run from r+3 out to r+len.
+static void drawSun(int cx, int cy, int r, int len, UWORD color = COL_YELLOW) {
   // Direction table scaled by 10, so diagonal rays are not longer than straight ones.
   static const int8_t D[8][2] = {{10, 0}, {7, 7}, {0, 10}, {-7, 7}, {-10, 0}, {-7, -7}, {0, -10}, {7, -7}};
-  Paint_DrawCircle(cx, cy, r, COL_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawCircle(cx, cy, r, color, DOT_PIXEL_1X1, DRAW_FILL_FULL);
   for (int i = 0; i < 8; i++) {
     int x0 = cx + D[i][0] * (r + 3) / 10, y0 = cy + D[i][1] * (r + 3) / 10;
     int x1 = cx + D[i][0] * (r + len) / 10, y1 = cy + D[i][1] * (r + len) / 10;
-    Paint_DrawLine(x0, y0, x1, y1, COL_YELLOW, DOT_PIXEL_2X2, LINE_STYLE_SOLID);
+    Paint_DrawLine(x0, y0, x1, y1, color, DOT_PIXEL_2X2, LINE_STYLE_SOLID);
   }
 }
 
@@ -97,4 +97,22 @@ void iconThunderstorm(int cx, int cy) {
 // 17 x 24 (Font24 glyph): x cx-8..cx+9, y cy..cy+24
 void iconUnknown(int cx, int cy) {
   Paint_DrawString_EN(cx - 8, cy, "?", &Font24, COL_BLACK, COL_WHITE);
+}
+
+// ---------- small icons for the sunrise / sunset line ----------
+// Sized to sit next to a line of Font16 text (16 px high), centred on (cx, cy).
+
+// Sunrise: small red sun. Red instead of yellow, because a small yellow shape is hard to
+// see on white. 20 x 20: x cx-10..cx+10, y cy-10..cy+10
+void iconSunrise(int cx, int cy) {
+  drawSun(cx, cy, 3, 6, COL_RED);
+}
+
+// Sunset: black crescent moon ("banana"). A black disc with a white disc drawn over its
+// upper right part; what is left of the black one is the crescent.
+// Moon 15 x 15: x cx-7..cx+7, y cy-7..cy+7. The white disc reaches x cx+10 and y cy-9,
+// so keep other drawings out of that corner.
+void iconMoon(int cx, int cy) {
+  Paint_DrawCircle(cx, cy, 7, COL_BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawCircle(cx + 4, cy - 3, 6, COL_WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
 }
