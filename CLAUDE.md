@@ -54,7 +54,7 @@ WiFi passwords). Ignore them and never commit them.
 - Missing values are drawn as `--`; numbers in black, units in red.
 - Respect Waveshare's ≥ 3 min between refreshes (`REFRESH_MIN_MINUTES`) and avoid
   needless refreshes (each takes 15-20 s and costs battery).
-- Pins: GPIO12 stays free (strapping pin). GPIO33 is reserved for the planned button.
+- Pins: GPIO12 stays free (strapping pin). GPIO33 is the push button (`BUTTON_PIN`, ext0 wake from deep sleep).
 - Comments are short, plain English, and explain *why*. File headers describe the module's job.
 
 ## Docs and versions

@@ -8,44 +8,36 @@ When the view is enabled, the user enters the URL to fetch the image from at set
 - [ ] URL field for fetching the image from the local network.
 
 ## Push button: refresh now / open setup
-One button on the case:
-- **Short press:** refresh the screen now (same as a timer wake: sensor, fetch, redraw).
-- **Long press (hold 2-4 s):** open the setup portal, same as after a reset.
+One button on the case, GPIO33 to GND (README "Push button").
+- **Press: refresh now** (done in 0.11): wakes from deep sleep, forced refresh, next bottom view.
+- **Long press (hold 2-4 s):** open the setup portal, same as after a reset. Not planned for now.
   To be discussed: is this worth it, or is a reset button / power switch better? See "Options" below.
 
 ### Hardware
-- Push button (normally open) between **GPIO33** and **GND**.
-- GPIO33 is a free RTC pin, so it can wake the ESP32 from deep sleep, and it has an internal
-  pull-up. It is not a strapping pin and is not on the I2C pins (21/22) used by the BMP280.
-- Optional: an external 100 kΩ pull-up to 3V3 and a 100 nF capacitor across the button,
-  for hardware debounce and a pull-up that doesn't depend on the RTC settings.
-- Avoid GPIO0/2/12/15 (strapping pins). GPIO34-39 only work with an external pull-up
-  (they have no internal one).
+- Done: button between **GPIO33** and **GND**, internal pull-up, so no resistor needed.
+  Optional 100 kΩ pull-up to 3V3 + 100 nF across the button for noisy setups (in README).
 - Optional feedback LED: many dev boards have one on GPIO2. Blinking it once the long press
   counts lets the user know to let go, since the e-paper takes 15-20 s to show anything.
 
 ### Firmware
-- [ ] **Wake on the button:** in `goToSleep()`, also `esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0)`
-      (wake when the pin is low) plus `rtc_gpio_pullup_en()` / `rtc_gpio_pulldown_dis()` on
-      GPIO33. With ext0 the RTC peripherals stay powered, which costs a few µA.
-- [ ] **Press length:** on `ESP_SLEEP_WAKEUP_EXT0`, read the pin in a loop. Released before
-      2 s = short press, still low at 2 s = long press (no need to wait for 4 s). The ESP32 takes
-      ~0.2-0.3 s to boot, so measure from `millis()` (time since boot), not from `setup()` start.
-      Ignore presses under ~50 ms (bounce).
-- [ ] **Setup check must change:** `setup()` now opens the portal whenever the wake cause is
-      not `ESP_SLEEP_WAKEUP_TIMER`, so a button wake would always open it. Open it only on
-      power-up / reset (`ESP_SLEEP_WAKEUP_UNDEFINED`) or on a long press.
-- [ ] **Short press = forced refresh:** always redraw the panel, even when the
+- [x] **Wake on the button:** `goToSleep()` arms ext0 on GPIO33 (wake on LOW) with the RTC
+      pull-up, as the last step before sleep. Not armed if the button is held at that moment.
+- [x] **Setup check:** button wakes (`ESP_SLEEP_WAKEUP_EXT0`) don't open the portal.
+- [x] **Forced refresh:** a button wake always redraws, even when the
       "still failing, indoor unchanged" check would skip it.
+- [x] **Next timer:** after a button refresh it sleeps a full period (normal flow).
+- [x] Presses while the ESP32 is awake are ignored (the wake source is only armed for deep sleep).
+- [x] Docs: wiring comment in the `.ino`, README "Push button" and "Pins to keep free".
+- [ ] **3-minute rule (later, if needed):** Waveshare asks for >= 3 min between refreshes; now a
+      press right after a refresh starts another one. Fix: keep the time of the last refresh in
+      RTC memory (`time(nullptr)` keeps counting in deep sleep). On a button wake less than
+      `REFRESH_MIN_MINUTES` after it, set an RTC "pending" flag and sleep until the 3 min mark
+      without reading sensors or WiFi. On that wake do the forced refresh.
+- [ ] **Press length (only with long press):** on `ESP_SLEEP_WAKEUP_EXT0`, read the pin in a loop.
+      Released before 2 s = short press, still low at 2 s = long press. Measure from `millis()`
+      (time since boot, ~0.2-0.3 s boot), ignore presses under ~50 ms (bounce).
 - [ ] **Long press = portal without reset:** unlike EN, RTC memory is kept, so the last weather,
       failure count and bottom view survive. After the portal, carry on with a normal refresh.
-- [ ] **Next timer:** after a button refresh, sleep a full refresh period (`cfg.refreshMin`) again.
-- [ ] **Too many refreshes:** Waveshare asks for >= 3 min between refreshes. Either accept that
-      a button press is rare, or ignore short presses within ~1 min of the last refresh
-      (keep the last refresh time in RTC memory; no clock, so track it with sleep time).
-- [ ] Presses while the ESP32 is awake (during the 15-20 s refresh) are ignored. OK, or poll
-      the pin at the end of `setup()` and refresh once more.
-- [ ] Docs: wiring comment in the `.ino`, README wiring table and "Pins to keep free".
 
 ### Options (to discuss)
 | Option | Refresh now | Setup | Cost / notes |
