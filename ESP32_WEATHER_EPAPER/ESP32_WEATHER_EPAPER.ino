@@ -1,9 +1,10 @@
 // Weather on a 1.54" 4-color e-Paper (G) with ESP32
-// Version 0.10 (see "Version history" in README.md)
+// Version 0.11 (see "Version history" in README.md)
 //
 // Wakes up, connects to WiFi, fetches current weather from Open-Meteo
 // (no API key needed), redraws the screen, puts the panel to sleep, then
-// deep-sleeps the ESP32 until the next refresh.
+// deep-sleeps the ESP32 until the next refresh. A press of the push button
+// during deep sleep does the same right away.
 // The bottom half of the screen changes on every refresh between views:
 // a 3-day forecast, a 12-hour temperature/humidity graph, height / pressure / sunrise-sunset
 // and an optional picture (see "bottom area").
@@ -50,6 +51,12 @@
  *   SCL           | D22       | BMP_SCL in local_sensor.cpp
  *   (I2C address 0x76 or 0x77, both are tried)
  *
+ *   Push button   | ESP32 pin | Note
+ *   --------------+-----------+-----------------------------------
+ *   pin 1         | D33       | BUTTON_PIN below; internal pull-up, so no resistor needed
+ *   pin 2         | GND       | normally open; press = refresh now + next bottom view
+ *   (optional: 100 kOhm D33 -> 3V3 and 100 nF across the button, see README)
+ *
  * BS jumper on the display: 0 (4-line SPI).
  * Leave D12 unconnected (strapping pin, can block boot/flashing).
  * Upload tip: if "Wrong boot mode" appears, hold BOOT, tap EN, release BOOT.
@@ -60,6 +67,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include "DEV_Config.h"
 #include "panel.h"
 #include "GUI_Paint.h"
@@ -81,8 +89,13 @@ const uint32_t RETRY_MINUTES = 1;    // used when WiFi/fetch fails
 // up to this many times, so a long outage doesn't drain the battery with retries.
 const uint8_t MAX_FAIL_COUNT = 15;
 
-// WiFi setup portal: open this long after power-up / reset, never after deep sleep.
+// WiFi setup portal: open this long after power-up / reset, never after deep sleep
+// (timer or button wake).
 const uint32_t SETUP_PORTAL_SECONDS = 120;
+
+// Push button to GND. Wakes the ESP32 from deep sleep only (ignored while awake).
+// Must be an RTC pin to wake from deep sleep; GPIO33 also has an internal pull-up.
+#define BUTTON_PIN GPIO_NUM_33
 
 #define DEBUG_LOG 1   // 1 = print progress to the Serial Monitor, 0 = silent (battery runs)
 // ------------------------------
@@ -782,10 +795,21 @@ static void panelOff() {
 
 static void goToSleep(uint32_t seconds) {
   LOG("Deep sleep for %u s\n", (unsigned)seconds);
+  esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
+  // Arm the button only now, as the very last step: presses during the fetch and the
+  // panel refresh do nothing, it only works once the chip is asleep.
+  // If it is held right now, don't arm it, or it would wake the chip again at once.
+  if (digitalRead(BUTTON_PIN) == HIGH) {
+    esp_sleep_enable_ext0_wakeup(BUTTON_PIN, 0);   // 0 = wake when the pin goes LOW (pressed)
+    // In deep sleep only the RTC part of the chip runs, so its own pull-up must hold the pin HIGH.
+    rtc_gpio_pullup_en(BUTTON_PIN); // Needed to keep pin pulled HIGH when the panel is powered off. 
+    rtc_gpio_pulldown_dis(BUTTON_PIN); // precaution: It guarantees "pulled up, not pulled down" no matter what ran before. It's also the pattern Espressif's own deep-sleep example uses.
+  } else {
+    LOG("Button held, timer wake only this time\n");
+  }
 #if DEBUG_LOG
   Serial.flush();   // let the last line finish printing before the chip sleeps
 #endif
-  esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
   esp_deep_sleep_start();
 }
 
@@ -794,11 +818,18 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 #endif
-  LOG("\n=== Wake: cause=%d haveLast=%d errShown=%d failCount=%u ===\n",
-      (int)esp_sleep_get_wakeup_cause(), haveLast, errShown, (unsigned)failCount);
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  bool buttonWake = (cause == ESP_SLEEP_WAKEUP_EXT0);   // woken by the push button
+  LOG("\n=== Wake: cause=%d%s haveLast=%d errShown=%d failCount=%u ===\n",
+      (int)cause, buttonWake ? " (button)" : "", haveLast, errShown, (unsigned)failCount);
 
-  // 0a. WiFi setup portal, only at power-up / reset. A timer wake from deep sleep skips it.
-  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
+  // After a button wake the pin is still owned by the RTC part; give it back so
+  // digitalRead() works in goToSleep(). The pull-up keeps it HIGH while not pressed.
+  rtc_gpio_deinit(BUTTON_PIN);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // 0a. WiFi setup portal, only at power-up / reset. Timer and button wakes skip it.
+  if (cause != ESP_SLEEP_WAKEUP_TIMER && !buttonWake) {
     LOG("Power-up: showing setup screen, then portal '%s' for %u s\n",
         SETUP_AP_NAME, (unsigned)SETUP_PORTAL_SECONDS);
     if (DEV_Module_Init() == 0) {
@@ -901,7 +932,8 @@ void setup() {
   if (ok) {
     lastW = w;       // remember for later failed attempts (survives deep sleep)
     haveLast = true;
-  } else if (errShown && !indoorChanged) {
+  } else if (errShown && !indoorChanged && !buttonWake) {
+    // (a button press always redraws, so the user sees the next bottom view)
     LOG("Still failing, indoor unchanged, red 'Updated' line already on screen: skipping panel refresh\n");
     // Nothing on the screen would change; don't redo a 15-20 s refresh every retry.
     // If the indoor reading changed, fall through and redraw the old weather with the new indoor values.

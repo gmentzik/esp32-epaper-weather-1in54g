@@ -9,7 +9,7 @@ Other useful source was: https://esp32io.com/tutorials/
 Screen design, code architecture and features is mainly decided by human (me).
 Claude code is used as coding assistant.
 
-Current version: **0.10** (see [Version history](#version-history)).
+Current version: **0.11** (see [Version history](#version-history)).
 
 ## What it shows
 
@@ -119,7 +119,8 @@ detail. `-Demo` recreates the sample picture.
 At power-up or reset (not when waking from deep sleep) it first opens the
 [setup portal](#setup-portal) for 2 minutes.
 
-Each time the ESP32 wakes up it:
+The ESP32 wakes when the refresh period is over, or right away when the
+[push button](#push-button) is pressed. Each time it wakes it:
 
 1. Reads the indoor sensors (DHT22, BMP280).
 2. Connects to WiFi and fetches current weather from [Open-Meteo](https://open-meteo.com/) (no API key needed).
@@ -135,6 +136,7 @@ When the update fails (no WiFi or the API is unreachable):
   up to 15 steps), so a long outage doesn't drain the battery.
 - **No needless refreshes:** while it keeps failing, the panel is only refreshed again
   if the indoor reading on screen would change. Each full refresh takes 15-20 s.
+  A button press always redraws, so it still moves on to the next bottom view.
 
 Values that must survive deep sleep (last weather, failure count, what is on screen) are kept in RTC memory.
 A reset or power loss clears them. The settings from the setup portal (WiFi, location,
@@ -148,6 +150,7 @@ options) are kept in flash and are never cleared.
 | Waveshare 1.54" e-Paper (G) | 200×200, black / white / yellow / red ((https://www.waveshare.com/wiki/1.54inch_e-Paper_Module_(G)_Manual)) |
 | DHT22 (AM2302) module | temperature and humidity |
 | BMP280 module (I2C) | air pressure |
+| Push button (normally open) | refresh now; optional 100 kΩ resistor and 100 nF capacitor |
 | Jumper wires, USB cable | |
 
 ## Wiring
@@ -198,7 +201,7 @@ flowchart LR
     B_GND[GND]
   end
 
-  subgraph BTN["Push button (planned, see TODO.md)"]
+  subgraph BTN["Push button"]
     K_A["pin 1"]
     K_B["pin 2"]
   end
@@ -224,22 +227,22 @@ flowchart LR
   P22 ---|I2C clock| B_SCL
   P_GND --- B_GND
 
-  %% Planned: normally-open button, GPIO33 to GND (internal pull-up, wakes from deep sleep)
-  P33 -.-|"short press = refresh, long press = setup"| K_A
-  P_GND -.- K_B
+  %% Normally-open button, GPIO33 to GND (internal pull-up, wakes from deep sleep)
+  P33 ---|"press = refresh now"| K_A
+  P_GND --- K_B
+  K_A -.-|optional| R2["100 kΩ pull-up to 3V3"]
+  K_A -.-|optional, across the button| C1["100 nF to GND"]
 
   classDef power fill:#f8d7da,stroke:#c0392b,color:#000
   classDef ground fill:#d6d8db,stroke:#333,color:#000
   classDef free fill:#fff3cd,stroke:#b8860b,color:#000,stroke-dasharray:4 3
   class E_VCC,P_3V3,D_VCC,B_VCC power
   class E_GND,P_GND,D_GND,B_GND ground
-  classDef planned fill:#dbeafe,stroke:#2563eb,color:#000,stroke-dasharray:4 3
-  class P12,R free
-  class P33,K_A,K_B planned
+  class P12,R,R2,C1 free
 ```
 
-The blue dashed parts (push button on GPIO33) are planned and not in the firmware yet;
-see "Push button" in `TODO.md`.
+The yellow dashed parts are optional or must stay free: the DHT22 pull-up (bare sensor
+only), the button's resistor and capacitor (see [Push button](#push-button)), and GPIO12.
 
 ### e-Paper display
 
@@ -281,9 +284,56 @@ a BME280 too, since some boards sold as "BMP280" carry one. The sensor runs in f
 mode: it takes one reading when asked and then sleeps, so it draws almost nothing while
 the ESP32 deep-sleeps. Module boards already have the I2C pull-up resistors.
 
+### Push button
+
+| Button pin | ESP32 pin | Note |
+|---|---|---|
+| pin 1 | GPIO33 | Set by `BUTTON_PIN` in `ESP32_WEATHER_EPAPER.ino` |
+| pin 2 | GND | |
+
+A press while the ESP32 deep-sleeps wakes it at once. It reads the sensors, fetches the
+weather and refreshes the screen, which also moves the bottom area on to the next view.
+After that it sleeps a full refresh period again.
+
+- **Only while asleep:** the button is armed as the very last step before deep sleep.
+  Presses while the ESP32 is awake (setup portal, fetch, the 15-20 s refresh) do nothing.
+- **Held button:** if the button is still pressed when the ESP32 goes to sleep, it is not
+  armed for that sleep (it would wake the chip again at once). That sleep ends on the timer.
+- **No 3-minute guard yet:** Waveshare asks for at least 3 minutes between refreshes, but
+  a press right after a refresh starts another one. Don't press it repeatedly (see `TODO.md`).
+- A button wake never opens the setup portal. Use EN (reset) for that.
+
+**Why a pull-up?** One side of the button goes to GND, so a press pulls GPIO33 LOW. When the
+button is not pressed, the pin is connected to nothing. Such a "floating" input picks up
+electrical noise and can read LOW by chance, which would wake the ESP32 at random. A
+pull-up resistor to 3V3 holds the pin HIGH until the button pulls it LOW.
+
+**No resistor needed:** the sketch turns on the ESP32's own internal pull-up (about 45 kΩ),
+both while awake and in deep sleep, so the two wires above are enough.
+
+**Optional, recommended for long wires or a noisy place:**
+
+```
+3V3 ──[100 kΩ]──┬──────────── GPIO33
+                │
+             ┌──┴──┐
+          button  100 nF
+             └──┬──┘
+                │
+GND ────────────┴────────────
+```
+
+- **100 kΩ from GPIO33 to 3V3:** an external pull-up, in parallel with the internal one.
+  It keeps the pin HIGH even if the internal pull-up is not set up, for example during
+  boot, and makes it less sensitive to noise. It draws nothing while the button is up.
+  During a press it draws only 33 µA.
+- **100 nF across the button (GPIO33 to GND):** smooths the contact bounce of the button and
+  short noise spikes on the wire, so they don't cause false wake-ups.
+
 ### Pins to keep free
 
 - **GPIO12:** leave unconnected. It is a strapping pin and can block boot or flashing.
+- **GPIO33** is used by the push button. Keep it for that even if no button is fitted.
 
 ## Software setup
 
@@ -340,8 +390,8 @@ The page has four parts:
 The station then connects and shows the weather. If nobody connects within 2 minutes, it
 continues with the saved settings. Everything is stored in the ESP32's flash (NVS), so it
 survives deep sleep, resets and power loss. On/off options share one byte (`flags`, one
-bit per option; bit 0 = picture view). Timer wake-ups from deep sleep never open the
-portal, so it costs no battery in normal running.
+bit per option; bit 0 = picture view). Wake-ups from deep sleep (timer or push button) never
+open the portal, so it costs no battery in normal running.
 
 The ESP32 only supports 2.4 GHz WiFi. If the password was wrong, press EN and set it again.
 
@@ -379,6 +429,8 @@ negative, e.g. New York is `40.71`, `-74.01`.
 | Pressure a few hPa off from weather reports | Open-Meteo's elevation is for the area, not your floor: about 1 hPa per 8 m of height difference |
 | `WiFi failed` | Press EN and re-enter WiFi name and password in the setup portal; the ESP32 only supports 2.4 GHz WiFi |
 | Display stays blank | Wiring, BS jumper at 0, BUSY pin connected |
+| Button does nothing | Wait until the refresh is over and the ESP32 sleeps (presses while awake are ignored); button between GPIO33 and GND. The log shows `cause=2 (button)` on a button wake |
+| Refreshes by itself, `cause=2 (button)` in the log | Noise on the button wire: add the optional 100 kΩ pull-up and 100 nF capacitor, keep the wires short |
 
 ## Project files
 
@@ -409,6 +461,13 @@ smaller screen still needs layout changes. Also regenerate `bottom_image.cpp`, a
 the panel's raw colour codes.
 
 ## Version history
+
+### 0.11
+- Push button on GPIO33 to GND. A press during deep sleep wakes the ESP32 for a refresh
+  right away, which also shows the next bottom view. Presses while it is awake are ignored.
+  It uses the internal pull-up, so no resistor is needed. See [Push button](#push-button).
+- A button wake never opens the setup portal, and always redraws the panel, even while updates
+  keep failing.
 
 ### 0.10
 - New bottom view 3 shows the height worked out from air pressure next to Open-Meteo's
