@@ -465,7 +465,8 @@ the panel's raw colour codes.
 ### 0.11
 - Push button on GPIO33 to GND. A press during deep sleep wakes the ESP32 for a refresh
   right away, which also shows the next bottom view. Presses while it is awake are ignored.
-  It uses the internal pull-up, so no resistor is needed. See [Push button](#push-button).
+  It uses the internal pull-up, so no resistor is needed (optional 100 kΩ + 100 nF for
+  noisy setups). See [Push button](#push-button).
 - A button wake never opens the setup portal, and always redraws the panel, even while updates
   keep failing.
 
