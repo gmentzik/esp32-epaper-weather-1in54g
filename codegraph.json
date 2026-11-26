@@ -1,0 +1,5 @@
+{
+  "extensions": {
+    ".ino": "cpp"
+  }
+}
